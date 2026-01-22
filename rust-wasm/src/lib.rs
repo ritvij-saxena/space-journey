@@ -1,0 +1,159 @@
+use wasm_bindgen::prelude::*;
+use web_sys::console;
+use noise::{NoiseFn, Perlin, Fbm};
+
+/// NoiseField generates procedural noise for the visualization.
+/// This will be supplemented/replaced by SD-generated textures.
+#[wasm_bindgen]
+pub struct NoiseField {
+    perlin: Perlin,
+    fbm: Fbm<Perlin>,
+    time: f32,
+}
+
+#[wasm_bindgen]
+impl NoiseField {
+    #[wasm_bindgen(constructor)]
+    pub fn new(seed: u32) -> NoiseField {
+        console::log_1(&"NoiseField initialized".into());
+
+        let perlin = Perlin::new(seed);
+        let mut fbm = Fbm::<Perlin>::new(seed);
+        fbm.octaves = 6;
+        fbm.frequency = 1.0;
+        fbm.lacunarity = 2.0;
+        fbm.persistence = 0.5;
+
+        NoiseField {
+            perlin,
+            fbm,
+            time: 0.0,
+        }
+    }
+
+    /// Update time for animation
+    pub fn update(&mut self, dt: f32) {
+        self.time += dt;
+    }
+
+    /// Get current time
+    pub fn get_time(&self) -> f32 {
+        self.time
+    }
+
+    /// Generate a 3D noise texture slice for shader sampling
+    /// Returns a 2D slice of 3D noise (size x size) at given z-depth
+    /// Format: RGBA where RGB encodes 3 offset noise samples, A is primary
+    pub fn generate_noise_slice(&self, size: u32, z_offset: f32) -> Vec<f32> {
+        let total = (size * size * 4) as usize; // RGBA
+        let mut data = Vec::with_capacity(total);
+
+        let size_f = size as f32;
+        let scale = 2.0;
+        let time_offset = self.time * 0.05;
+
+        for y in 0..size {
+            for x in 0..size {
+                let nx = ((x as f32 / size_f) * 2.0 - 1.0) * scale;
+                let ny = ((y as f32 / size_f) * 2.0 - 1.0) * scale;
+                let nz = z_offset * scale;
+
+                // Primary noise (used for SDF)
+                let n1 = self.sample_fbm(
+                    nx + time_offset,
+                    ny + time_offset * 0.7,
+                    nz + time_offset * 0.5,
+                );
+
+                // Offset samples (for variation/flow)
+                let n2 = self.sample_fbm(
+                    nx + 100.0 + time_offset * 0.3,
+                    ny + time_offset * 0.5,
+                    nz + time_offset * 0.8,
+                );
+
+                let n3 = self.sample_fbm(
+                    nx + time_offset * 0.6,
+                    ny + 100.0 + time_offset * 0.4,
+                    nz + time_offset * 0.3,
+                );
+
+                // Normalize to 0-1 range
+                data.push((n1 + 1.0) * 0.5); // R
+                data.push((n2 + 1.0) * 0.5); // G
+                data.push((n3 + 1.0) * 0.5); // B
+                data.push((n1 + 1.0) * 0.5); // A (duplicate of primary)
+            }
+        }
+
+        data
+    }
+
+    /// Generate a 3D noise volume as a texture atlas
+    /// Stores depth slices in a grid layout
+    pub fn generate_noise_atlas(&self, slice_size: u32, depth_slices: u32) -> Vec<f32> {
+        let slices_per_row = (depth_slices as f32).sqrt().ceil() as u32;
+        let atlas_size = slice_size * slices_per_row;
+        let total = (atlas_size * atlas_size * 4) as usize;
+        let mut data = vec![0.0; total];
+
+        for z in 0..depth_slices {
+            let slice_x = (z % slices_per_row) * slice_size;
+            let slice_y = (z / slices_per_row) * slice_size;
+            let z_offset = (z as f32 / depth_slices as f32) * 2.0 - 1.0;
+
+            let slice_data = self.generate_noise_slice(slice_size, z_offset);
+
+            // Copy slice into atlas
+            for y in 0..slice_size {
+                for x in 0..slice_size {
+                    let src_idx = ((y * slice_size + x) * 4) as usize;
+                    let dst_x = slice_x + x;
+                    let dst_y = slice_y + y;
+                    let dst_idx = ((dst_y * atlas_size + dst_x) * 4) as usize;
+
+                    if dst_idx + 3 < data.len() && src_idx + 3 < slice_data.len() {
+                        data[dst_idx] = slice_data[src_idx];
+                        data[dst_idx + 1] = slice_data[src_idx + 1];
+                        data[dst_idx + 2] = slice_data[src_idx + 2];
+                        data[dst_idx + 3] = slice_data[src_idx + 3];
+                    }
+                }
+            }
+        }
+
+        data
+    }
+
+    /// Get atlas dimensions for a given configuration
+    pub fn get_atlas_size(slice_size: u32, depth_slices: u32) -> u32 {
+        let slices_per_row = (depth_slices as f32).sqrt().ceil() as u32;
+        slice_size * slices_per_row
+    }
+
+    fn sample_fbm(&self, x: f32, y: f32, z: f32) -> f32 {
+        self.fbm.get([x as f64, y as f64, z as f64]) as f32
+    }
+
+    /// Convert weather parameters to shader uniforms
+    pub fn weather_to_params(&self, temperature: f32, humidity: f32, wind_speed: f32) -> Vec<f32> {
+        // Normalize inputs
+        let temp_norm = (temperature.clamp(-20.0, 45.0) + 20.0) / 65.0;
+        let humidity_norm = humidity.clamp(0.0, 100.0) / 100.0;
+        let wind_norm = wind_speed.clamp(0.0, 30.0) / 30.0;
+
+        vec![
+            temp_norm,                           // 0: color warmth
+            humidity_norm,                       // 1: surface glossiness
+            0.5 + wind_norm * 1.5,              // 2: animation speed
+            0.3 + wind_norm * 0.5,              // 3: noise threshold offset
+            0.5 + temp_norm * 0.3,              // 4: noise scale
+            humidity_norm * 0.4,                 // 5: subsurface intensity
+        ]
+    }
+}
+
+#[wasm_bindgen]
+pub fn greet(name: &str) {
+    console::log_1(&format!("Hello, {}! Welcome to Unsupervised.", name).into());
+}

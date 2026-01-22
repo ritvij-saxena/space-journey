@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unsupervised Tribute - Generative Art Installation</title>
+    <link rel="stylesheet" href="./src/styles.css">
+</head>
+<body>
+    <!-- Start overlay - required for audio autoplay -->
+    <div id="start-overlay">
+        <div id="start-content">
+            <h1>Unsupervised Tribute</h1>
+            <p>A generative art experience</p>
+            <button id="start-button">Enter</button>
+            <p class="hint">Audio: Marconi Union - Weightless</p>
+        </div>
+    </div>
+
+    <div id="container">
+        <canvas id="canvas"></canvas>
+        <div id="info-panel">
+            <h1>Unsupervised Tribute</h1>
+            <div id="weather-data">
+                <p>Temperature: <span id="temp">--</span>°C</p>
+                <p>Humidity: <span id="humidity">--</span>%</p>
+                <p>Wind: <span id="wind">--</span> m/s</p>
+            </div>
+            <div id="location">
+                <p id="city">Generative Environment</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- YouTube Audio Player (hidden) -->
+    <div id="youtube-player-container" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;">
+        <div id="youtube-player"></div>
+    </div>
+
+    <!-- Audio control hint -->
+    <div id="audio-hint">Space: Play/Pause | M: Mute | ↑↓: Volume</div>
+
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <script type="module" src="./src/main.js"></script>
+</body>
+</html>
