@@ -34,9 +34,9 @@ export class PostProcessor {
     const renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(renderPass);
 
-    // Bloom pass - subtle glow
+    // Bloom pass at half resolution for performance
     this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(width, height),
+      new THREE.Vector2(width / 2, height / 2),
       0.8, // strength
       0.5, // radius
       0.6  // threshold
@@ -79,7 +79,8 @@ export class PostProcessor {
     this.composer.setSize(width, height);
 
     if (this.bloomPass) {
-      this.bloomPass.resolution.set(width, height);
+      // Bloom at half resolution for performance
+      this.bloomPass.resolution.set(width / 2, height / 2);
     }
   }
 

@@ -11,21 +11,42 @@
 export class WeatherManager {
   constructor() {
     this.sessionSeed = Date.now() + Math.random() * 1000000;
+    // Current smoothed values (what we return)
     this.weatherData = {
       temperature: 20,
       humidity: 50,
       windSpeed: 5,
       description: "generative conditions",
     };
-    this.updateInterval = 5000; // Update every 5 seconds for more dynamic variation
-    this.motionData = { x: 0, y: 0, z: 0 }; // Device motion
+    // Target values (what we're interpolating towards)
+    this.targetData = {
+      temperature: 20,
+      humidity: 50,
+      windSpeed: 5,
+    };
+    this.updateInterval = 5000;
+    this.motionData = { x: 0, y: 0, z: 0 };
+    this.lerpSpeed = 0.02; // Smooth interpolation speed
   }
 
   async init() {
     this.setupDeviceMotion();
     this.updateEnvironmentalFactors();
-    // Update environmental factors every 5 seconds
+    // Update target values every 5 seconds
     setInterval(() => this.updateEnvironmentalFactors(), this.updateInterval);
+    // Smooth interpolation every frame
+    this.startSmoothUpdate();
+  }
+
+  startSmoothUpdate() {
+    const smoothUpdate = () => {
+      // Lerp current values towards target
+      this.weatherData.temperature += (this.targetData.temperature - this.weatherData.temperature) * this.lerpSpeed;
+      this.weatherData.humidity += (this.targetData.humidity - this.weatherData.humidity) * this.lerpSpeed;
+      this.weatherData.windSpeed += (this.targetData.windSpeed - this.weatherData.windSpeed) * this.lerpSpeed;
+      requestAnimationFrame(smoothUpdate);
+    };
+    requestAnimationFrame(smoothUpdate);
   }
 
   /**
@@ -100,7 +121,7 @@ export class WeatherManager {
     const seasonalTemp = Math.sin(dayFraction * Math.PI * 2) * 10;
     const randomTemp =
       (pseudoRandom(timeSeed + screenSeed) - 0.5) * 20 + motionInfluence * 5;
-    this.weatherData.temperature =
+    this.targetData.temperature =
       20 + baseTempCycle + seasonalTemp + randomTemp;
 
     // Humidity: cycles with minute + randomization
@@ -108,7 +129,7 @@ export class WeatherManager {
     const baseHumidity =
       (Math.sin(minuteFraction * Math.PI * 2) * 0.3 + 0.5) * 100;
     const randomHumidity = pseudoRandom(timeSeed * 1.5 + screenSeed) * 40 - 20;
-    this.weatherData.humidity = Math.max(
+    this.targetData.humidity = Math.max(
       10,
       Math.min(100, baseHumidity + randomHumidity + motionInfluence * 10),
     );
@@ -119,7 +140,7 @@ export class WeatherManager {
       (Math.sin((hourFraction - 0.25) * Math.PI) * 0.5 + 0.5) * 15;
     const randomWind =
       pseudoRandom(timeSeed * 2 + screenSeed) * 10 - 5 + motionInfluence * 8;
-    this.weatherData.windSpeed = Math.max(0, baseWind + randomWind);
+    this.targetData.windSpeed = Math.max(0, baseWind + randomWind);
 
     // Weather condition based on multiple factors
     this.weatherData.description = this.getConditionDescription(

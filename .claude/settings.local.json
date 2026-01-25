@@ -3,7 +3,8 @@
     "allow": [
       "Bash(wasm-pack build:*)",
       "Bash(timeout 5 npm run dev:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(npm run dev)"
     ]
   }
 }

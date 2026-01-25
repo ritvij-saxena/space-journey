@@ -20,9 +20,12 @@ import {
 const CONFIG = {
   noiseSliceSize: 64,
   noiseDepthSlices: 16,
-  noiseUpdateInterval: 120,
-  useSDTextures: false,
-  sdTextureUrl: "./textures/sd_atlas.png",
+  noiseUpdateInterval: 600,
+
+  // === ART TEXTURES (from Colab) ===
+  // Set to true after placing sd_atlas.png in public/textures/
+  useSDTextures: true,
+  sdTextureUrl: "/textures/sd_atlas.png",
   sdTextureSlices: 16,
 };
 
@@ -48,7 +51,7 @@ class UnsupervisedApp {
       60,
       window.innerWidth / window.innerHeight,
       0.1,
-      100
+      100,
     );
     this.camera.position.set(0, 0, 5);
 
@@ -98,7 +101,7 @@ class UnsupervisedApp {
       try {
         await this.raymarcher.loadSDTexture(
           CONFIG.sdTextureUrl,
-          CONFIG.sdTextureSlices
+          CONFIG.sdTextureSlices,
         );
         console.log("SD texture loaded");
       } catch (error) {
@@ -115,7 +118,7 @@ class UnsupervisedApp {
     this.postProcessor = new PostProcessor(
       this.renderer,
       this.scene,
-      this.camera
+      this.camera,
     );
 
     this.setupEventListeners();
@@ -157,6 +160,13 @@ class UnsupervisedApp {
     // Initialize YouTube player
     this.initYouTubePlayer();
 
+    // Fade out audio hint after 5 seconds
+    setTimeout(() => {
+      if (this.audioHint) {
+        this.audioHint.classList.add("fade");
+      }
+    }, 5000);
+
     console.log("Experience started");
   }
 
@@ -170,39 +180,65 @@ class UnsupervisedApp {
   }
 
   createYouTubePlayer() {
-    // Marconi Union - Weightless (Official Video ID)
-    this.ytPlayer = new YT.Player("youtube-player", {
-      videoId: "UfcAVejslrU", // Weightless by Marconi Union
-      playerVars: {
-        autoplay: 1,
-        loop: 1,
-        playlist: "UfcAVejslrU", // Required for looping
-        controls: 0,
-        showinfo: 0,
-        modestbranding: 1,
-        fs: 0,
-        rel: 0,
-      },
-      events: {
-        onReady: (event) => {
-          event.target.setVolume(this.volume);
-          event.target.playVideo();
-          console.log("YouTube audio started");
+    // Ambient music options (fallback if one fails)
+    const videoIds = [
+      "UfcAVejslrU", // Marconi Union - Weightless
+      "jfKfPfyJRdk", // lofi beats
+      "lE6RYpe9IT0", // Relaxing ambient
+    ];
+    this.currentVideoIndex = 0;
+
+    const tryVideo = (index) => {
+      if (index >= videoIds.length) {
+        console.log("All video sources failed, running without audio");
+        this.updateAudioHint();
+        return;
+      }
+
+      const videoId = videoIds[index];
+      console.log(`Trying video: ${videoId}`);
+
+      this.ytPlayer = new YT.Player("youtube-player", {
+        videoId: videoId,
+        playerVars: {
+          autoplay: 1,
+          loop: 1,
+          playlist: videoId,
+          controls: 0,
+          showinfo: 0,
+          modestbranding: 1,
+          fs: 0,
+          rel: 0,
+          origin: window.location.origin,
         },
-        onStateChange: (event) => {
-          // YT.PlayerState.ENDED === 0
-          if (event.data === 0) {
-            // Song ended, restart from beginning
-            event.target.seekTo(0);
+        events: {
+          onReady: (event) => {
+            event.target.setVolume(this.volume);
             event.target.playVideo();
-            console.log("Restarting audio from beginning");
-          }
+            console.log("YouTube audio started");
+            this.updateAudioHint();
+          },
+          onStateChange: (event) => {
+            if (event.data === 0) {
+              event.target.seekTo(0);
+              event.target.playVideo();
+            }
+          },
+          onError: (event) => {
+            console.log(
+              `YouTube error ${event.data} for video ${videoId}, trying next...`,
+            );
+            // Destroy failed player and try next
+            if (this.ytPlayer) {
+              this.ytPlayer.destroy();
+            }
+            tryVideo(index + 1);
+          },
         },
-        onError: (event) => {
-          console.log("YouTube player error:", event.data);
-        },
-      },
-    });
+      });
+    };
+
+    tryVideo(0);
   }
 
   setVolume(vol) {
@@ -228,7 +264,11 @@ class UnsupervisedApp {
 
   updateAudioHint() {
     if (this.audioHint) {
-      let status = this.isPaused ? "PAUSED" : this.isMuted ? "MUTED" : `${this.volume}%`;
+      let status = this.isPaused
+        ? "PAUSED"
+        : this.isMuted
+          ? "MUTED"
+          : `${this.volume}%`;
       this.audioHint.textContent = `Space: Play/Pause | M: Mute | ↑↓: Volume | ${status}`;
     }
   }
@@ -262,12 +302,12 @@ class UnsupervisedApp {
     switch (e.key) {
       case "1":
         this.postProcessor?.setBloomStrength(
-          Math.max(0, this.postProcessor.getBloomPass().strength - 0.2)
+          Math.max(0, this.postProcessor.getBloomPass().strength - 0.2),
         );
         break;
       case "2":
         this.postProcessor?.setBloomStrength(
-          Math.min(3, this.postProcessor.getBloomPass().strength + 0.2)
+          Math.min(3, this.postProcessor.getBloomPass().strength + 0.2),
         );
         break;
       case "r":
@@ -308,7 +348,7 @@ class UnsupervisedApp {
     try {
       const { data, size, slices } = generateNoiseAtlas(
         CONFIG.noiseSliceSize,
-        CONFIG.noiseDepthSlices
+        CONFIG.noiseDepthSlices,
       );
       this.raymarcher.updateNoiseFromWasm(data, size, slices);
     } catch (error) {
@@ -330,13 +370,8 @@ class UnsupervisedApp {
     if (this.wasmReady) {
       updateNoiseField(deltaTime);
 
-      // Periodically regenerate noise texture
-      if (
-        !this.raymarcher.isUsingSDTexture() &&
-        this.frameCount % CONFIG.noiseUpdateInterval === 0
-      ) {
-        this.updateNoiseTexture();
-      }
+      // Note: No periodic texture regeneration needed - shader animates via uTime
+      // The initial noise texture provides the base pattern
 
       // Update visual parameters from weather
       const visualParams = getVisualParams(weatherData);

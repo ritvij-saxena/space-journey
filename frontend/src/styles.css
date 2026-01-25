@@ -4,11 +4,34 @@
   box-sizing: border-box;
 }
 
+html, body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
 body {
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   background: #000;
   color: #fff;
-  overflow: hidden;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+/* Fullscreen mode */
+:fullscreen {
+  background: #000;
+}
+
+:-webkit-full-screen {
+  background: #000;
+}
+
+:-moz-full-screen {
+  background: #000;
 }
 
 /* Start overlay */
@@ -88,22 +111,7 @@ canvas {
 }
 
 #info-panel {
-  position: absolute;
-  top: 20px;
-  left: 20px;
-  background: rgba(0, 0, 0, 0.5);
-  padding: 20px;
-  border-radius: 8px;
-  backdrop-filter: blur(10px);
-  max-width: 250px;
-  font-size: 13px;
-  line-height: 1.6;
-  opacity: 0.8;
-  transition: opacity 0.3s ease;
-}
-
-#info-panel:hover {
-  opacity: 1;
+  display: none; /* Hidden for immersive experience */
 }
 
 #info-panel h1 {
@@ -139,12 +147,17 @@ canvas {
   margin: 0;
 }
 
-/* Audio control hint */
+/* Audio control hint - fades out */
 #audio-hint {
   position: fixed;
   bottom: 20px;
   right: 20px;
   font-size: 11px;
-  opacity: 0.4;
+  opacity: 0.3;
   letter-spacing: 1px;
+  transition: opacity 3s ease;
+}
+
+#audio-hint.fade {
+  opacity: 0;
 }
