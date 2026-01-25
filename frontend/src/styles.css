@@ -111,14 +111,62 @@ canvas {
 }
 
 #info-panel {
-  display: none; /* Hidden for immersive experience */
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  padding: 15px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 100;
+  min-width: 180px;
+  transition: all 0.3s ease;
+}
+
+#info-panel.collapsed {
+  min-width: auto;
+}
+
+#info-panel.collapsed #info-content {
+  display: none;
+}
+
+#info-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+}
+
+#info-toggle {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fff;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#info-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+#info-content {
+  margin-top: 12px;
 }
 
 #info-panel h1 {
-  font-size: 18px;
-  margin-bottom: 12px;
+  font-size: 14px;
+  margin: 0;
   font-weight: 300;
-  letter-spacing: 3px;
+  letter-spacing: 2px;
   text-transform: uppercase;
 }
 

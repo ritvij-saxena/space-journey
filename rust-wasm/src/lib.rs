@@ -151,6 +151,63 @@ impl NoiseField {
             humidity_norm * 0.4,                 // 5: subsurface intensity
         ]
     }
+
+    /// Generate particle positions for fluid simulation
+    /// Returns flattened array: [x, y, z, size, x, y, z, size, ...]
+    pub fn generate_particles(&self, count: u32) -> Vec<f32> {
+        let mut particles = Vec::with_capacity((count * 4) as usize);
+        let t = self.time;
+
+        for i in 0..count {
+            let fi = i as f32;
+            let ratio = fi / count as f32;
+
+            // Spherical distribution with noise displacement
+            let theta = ratio * std::f32::consts::PI * 2.0 * 13.0; // Golden angle spiral
+            let phi = (1.0 - 2.0 * ratio).acos();
+
+            // Base spherical position
+            let base_r = 1.2;
+            let mut x = base_r * phi.sin() * theta.cos();
+            let mut y = base_r * phi.sin() * theta.sin();
+            let mut z = base_r * phi.cos();
+
+            // Add flowing noise displacement
+            let noise_scale = 0.8;
+            let noise_x = self.fbm.get([
+                (x * noise_scale + t * 0.1) as f64,
+                (y * noise_scale) as f64,
+                (z * noise_scale + t * 0.05) as f64
+            ]) as f32;
+            let noise_y = self.fbm.get([
+                (x * noise_scale) as f64,
+                (y * noise_scale + t * 0.08) as f64,
+                (z * noise_scale + 100.0) as f64
+            ]) as f32;
+            let noise_z = self.fbm.get([
+                (x * noise_scale + 200.0) as f64,
+                (y * noise_scale + t * 0.12) as f64,
+                (z * noise_scale) as f64
+            ]) as f32;
+
+            // Apply displacement
+            let displacement = 0.6 + (t * 0.2).sin() * 0.15;
+            x += noise_x * displacement;
+            y += noise_y * displacement;
+            z += noise_z * displacement;
+
+            // Particle size varies with position and time
+            let size = 0.015 + (noise_x.abs() + noise_y.abs()) * 0.01
+                + ((t * 0.3 + fi * 0.01).sin() * 0.5 + 0.5) * 0.008;
+
+            particles.push(x);
+            particles.push(y);
+            particles.push(z);
+            particles.push(size);
+        }
+
+        particles
+    }
 }
 
 #[wasm_bindgen]

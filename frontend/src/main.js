@@ -1,32 +1,26 @@
 /**
  * Unsupervised Tribute
  *
- * Noise-field raymarching visualization inspired by Refik Anadol's Unsupervised.
+ * High-performance particle-based visualization inspired by Refik Anadol's Unsupervised.
+ * Uses Rust/WASM for particle computation, WebGL for rendering.
  */
 
 import * as THREE from "three";
 import { WeatherManager } from "./weather.js";
-import { Raymarcher } from "./raymarcher.js";
+import { ParticleRenderer } from "./particle-renderer.js";
 import { PostProcessor } from "./post-processing.js";
 import {
   initWasm,
   createNoiseField,
   updateNoiseField,
-  generateNoiseAtlas,
+  generateParticles,
   getVisualParams,
   isWasmReady,
 } from "./wasm-loader.js";
 
 const CONFIG = {
-  noiseSliceSize: 64,
-  noiseDepthSlices: 16,
-  noiseUpdateInterval: 600,
-
-  // === ART TEXTURES (from Colab) ===
-  // Set to true after placing sd_atlas.png in public/textures/
-  useSDTextures: true,
+  particleCount: 15000,
   sdTextureUrl: "/textures/sd_atlas.png",
-  sdTextureSlices: 16,
 };
 
 class UnsupervisedApp {
@@ -36,24 +30,26 @@ class UnsupervisedApp {
     this.startOverlay = document.getElementById("start-overlay");
     this.startButton = document.getElementById("start-button");
     this.audioHint = document.getElementById("audio-hint");
+    this.infoPanel = document.getElementById("info-panel");
+    this.infoToggle = document.getElementById("info-toggle");
 
     this.isStarted = false;
     this.ytPlayer = null;
-    this.volume = 50; // 0-100
+    this.volume = 50;
     this.isMuted = false;
     this.isPaused = false;
 
     // Three.js setup
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x010103);
+    this.scene.background = new THREE.Color(0x020204);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
       window.innerWidth / window.innerHeight,
       0.1,
-      100,
+      100
     );
-    this.camera.position.set(0, 0, 5);
+    this.camera.position.set(0, 0, 4);
 
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
@@ -65,8 +61,9 @@ class UnsupervisedApp {
 
     // Components
     this.weatherManager = new WeatherManager();
-    this.raymarcher = null;
+    this.particleRenderer = null;
     this.postProcessor = null;
+    this.artTexture = null;
 
     // State
     this.wasmReady = false;
@@ -84,54 +81,65 @@ class UnsupervisedApp {
       await initWasm();
       createNoiseField(Math.floor(Math.random() * 1000000));
       this.wasmReady = true;
-      console.log("WASM ready");
+      console.log("WASM ready - using Rust for particle computation");
     } catch (error) {
-      console.warn("WASM init failed, using fallback:", error);
+      console.warn("WASM init failed, using JS fallback:", error);
     }
+
+    // Load art texture
+    await this.loadArtTexture();
 
     // Initialize weather
     await this.weatherManager.init();
 
-    // Create raymarcher
-    this.raymarcher = new Raymarcher(this.camera);
-    this.scene.add(this.raymarcher.getMesh());
-
-    // Try to load SD textures if configured
-    if (CONFIG.useSDTextures) {
-      try {
-        await this.raymarcher.loadSDTexture(
-          CONFIG.sdTextureUrl,
-          CONFIG.sdTextureSlices,
-        );
-        console.log("SD texture loaded");
-      } catch (error) {
-        console.log("SD texture not available, using procedural noise");
-      }
-    }
-
-    // Initial noise texture from WASM
-    if (this.wasmReady && !this.raymarcher.isUsingSDTexture()) {
-      this.updateNoiseTexture();
-    }
+    // Create particle renderer
+    this.particleRenderer = new ParticleRenderer(this.camera, this.artTexture);
+    this.scene.add(this.particleRenderer.getMesh());
 
     // Create post processor
     this.postProcessor = new PostProcessor(
       this.renderer,
       this.scene,
-      this.camera,
+      this.camera
     );
 
     this.setupEventListeners();
 
-    // Start animation loop (renders even before user clicks)
+    // Start animation loop
     this.animate();
 
-    console.log("Unsupervised Tribute initialized - waiting for user to start");
+    console.log("Unsupervised Tribute initialized");
+  }
+
+  async loadArtTexture() {
+    return new Promise((resolve) => {
+      const loader = new THREE.TextureLoader();
+      loader.load(
+        CONFIG.sdTextureUrl,
+        (texture) => {
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          this.artTexture = texture;
+          console.log("Art texture loaded");
+          resolve(texture);
+        },
+        undefined,
+        () => {
+          console.log("Art texture not found, using procedural colors");
+          resolve(null);
+        }
+      );
+    });
   }
 
   setupEventListeners() {
     window.addEventListener("resize", () => this.onWindowResize());
     window.addEventListener("keydown", (e) => this.onKeyDown(e));
+
+    // Info panel toggle
+    if (this.infoToggle) {
+      this.infoToggle.addEventListener("click", () => this.toggleInfoPanel());
+    }
 
     // Start button
     if (this.startButton) {
@@ -145,6 +153,15 @@ class UnsupervisedApp {
           this.start();
         }
       });
+    }
+  }
+
+  toggleInfoPanel() {
+    if (this.infoPanel) {
+      this.infoPanel.classList.toggle("collapsed");
+      if (this.infoToggle) {
+        this.infoToggle.textContent = this.infoPanel.classList.contains("collapsed") ? "+" : "−";
+      }
     }
   }
 
@@ -171,7 +188,6 @@ class UnsupervisedApp {
   }
 
   initYouTubePlayer() {
-    // Wait for YouTube API to be ready
     if (typeof YT === "undefined" || typeof YT.Player === "undefined") {
       window.onYouTubeIframeAPIReady = () => this.createYouTubePlayer();
     } else {
@@ -180,13 +196,11 @@ class UnsupervisedApp {
   }
 
   createYouTubePlayer() {
-    // Ambient music options (fallback if one fails)
     const videoIds = [
       "UfcAVejslrU", // Marconi Union - Weightless
       "jfKfPfyJRdk", // lofi beats
       "lE6RYpe9IT0", // Relaxing ambient
     ];
-    this.currentVideoIndex = 0;
 
     const tryVideo = (index) => {
       if (index >= videoIds.length) {
@@ -196,8 +210,6 @@ class UnsupervisedApp {
       }
 
       const videoId = videoIds[index];
-      console.log(`Trying video: ${videoId}`);
-
       this.ytPlayer = new YT.Player("youtube-player", {
         videoId: videoId,
         playerVars: {
@@ -215,7 +227,6 @@ class UnsupervisedApp {
           onReady: (event) => {
             event.target.setVolume(this.volume);
             event.target.playVideo();
-            console.log("YouTube audio started");
             this.updateAudioHint();
           },
           onStateChange: (event) => {
@@ -224,14 +235,8 @@ class UnsupervisedApp {
               event.target.playVideo();
             }
           },
-          onError: (event) => {
-            console.log(
-              `YouTube error ${event.data} for video ${videoId}, trying next...`,
-            );
-            // Destroy failed player and try next
-            if (this.ytPlayer) {
-              this.ytPlayer.destroy();
-            }
+          onError: () => {
+            if (this.ytPlayer) this.ytPlayer.destroy();
             tryVideo(index + 1);
           },
         },
@@ -251,7 +256,6 @@ class UnsupervisedApp {
 
   toggleMute() {
     if (!this.ytPlayer) return;
-
     if (this.isMuted) {
       this.ytPlayer.unMute();
       this.isMuted = false;
@@ -275,7 +279,6 @@ class UnsupervisedApp {
 
   togglePause() {
     if (!this.ytPlayer) return;
-
     if (this.isPaused) {
       this.ytPlayer.playVideo();
       this.isPaused = false;
@@ -294,7 +297,7 @@ class UnsupervisedApp {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
 
-    this.raymarcher?.onResize();
+    this.particleRenderer?.onResize();
     this.postProcessor?.onResize();
   }
 
@@ -302,18 +305,17 @@ class UnsupervisedApp {
     switch (e.key) {
       case "1":
         this.postProcessor?.setBloomStrength(
-          Math.max(0, this.postProcessor.getBloomPass().strength - 0.2),
+          Math.max(0, this.postProcessor.getBloomPass().strength - 0.2)
         );
         break;
       case "2":
         this.postProcessor?.setBloomStrength(
-          Math.min(3, this.postProcessor.getBloomPass().strength + 0.2),
+          Math.min(3, this.postProcessor.getBloomPass().strength + 0.2)
         );
         break;
       case "r":
         if (this.wasmReady) {
           createNoiseField(Math.floor(Math.random() * 1000000));
-          this.updateNoiseTexture();
           console.log("Noise field reset");
         }
         break;
@@ -332,27 +334,11 @@ class UnsupervisedApp {
       case " ":
         e.preventDefault();
         if (!this.isStarted) {
-          // Space to start if not started
           this.start();
         } else {
-          // Space to pause/play audio if started
           this.togglePause();
         }
         break;
-    }
-  }
-
-  updateNoiseTexture() {
-    if (!this.wasmReady || this.raymarcher?.isUsingSDTexture()) return;
-
-    try {
-      const { data, size, slices } = generateNoiseAtlas(
-        CONFIG.noiseSliceSize,
-        CONFIG.noiseDepthSlices,
-      );
-      this.raymarcher.updateNoiseFromWasm(data, size, slices);
-    } catch (error) {
-      console.warn("Failed to update noise texture:", error);
     }
   }
 
@@ -366,26 +352,32 @@ class UnsupervisedApp {
     // Get weather data
     const weatherData = this.weatherManager.getCurrentWeather();
 
-    // Update WASM noise field
+    // Update particles using WASM
     if (this.wasmReady) {
       updateNoiseField(deltaTime);
 
-      // Note: No periodic texture regeneration needed - shader animates via uTime
-      // The initial noise texture provides the base pattern
+      // Generate particle positions in Rust/WASM
+      try {
+        const particleData = generateParticles(CONFIG.particleCount);
+        this.particleRenderer.updateFromWasm(particleData, this.time);
+      } catch (error) {
+        // Fallback to JS animation
+        this.particleRenderer.updateFallback(this.time);
+      }
 
       // Update visual parameters from weather
       const visualParams = getVisualParams(weatherData);
-      this.raymarcher.updateVisualParams(visualParams);
-
-      // Update post-processing
       this.postProcessor?.updateParams({
         intensity: visualParams?.animSpeed || 1.0,
         warmth: visualParams?.colorWarmth || 0.5,
       });
+    } else {
+      // JS fallback
+      this.particleRenderer.updateFallback(this.time);
     }
 
-    // Update raymarcher
-    this.raymarcher.update(this.time);
+    // Update particle renderer
+    this.particleRenderer.update(this.time);
 
     // Render
     this.postProcessor.render();
@@ -393,4 +385,4 @@ class UnsupervisedApp {
 }
 
 // Initialize
-const app = new UnsupervisedApp();
+new UnsupervisedApp();

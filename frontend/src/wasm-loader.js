@@ -98,3 +98,15 @@ export function getNoiseField() {
 export function isWasmReady() {
   return wasmModule !== null && noiseField !== null;
 }
+
+/**
+ * Generate particle positions using WASM
+ * @param {number} count - Number of particles
+ * @returns {Float32Array} Particle data [x, y, z, size, ...]
+ */
+export function generateParticles(count = 10000) {
+  if (!noiseField) {
+    throw new Error("NoiseField not created");
+  }
+  return new Float32Array(noiseField.generate_particles(count));
+}
