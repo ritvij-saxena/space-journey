@@ -1,0 +1,24 @@
+# Art processing configuration
+input_dir: "input"
+output_dir: "output"
+output_file: "art_states.bin"
+
+# CLIP model settings
+clip_model: "openai/clip-vit-base-patch32"
+
+# UMAP settings
+umap:
+  n_components: 3
+  n_neighbors: 15  # Will be adjusted based on image count
+  min_dist: 0.1
+  random_state: 42
+
+# Color extraction
+colors:
+  n_colors: 5
+  random_state: 42
+
+# Binary format
+binary:
+  version: 1
+  endian: "little"
