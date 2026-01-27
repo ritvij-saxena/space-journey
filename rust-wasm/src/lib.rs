@@ -2,6 +2,9 @@ use wasm_bindgen::prelude::*;
 use web_sys::console;
 use noise::{NoiseFn, Perlin, Fbm};
 
+mod art_data;
+pub use art_data::{ArtData, ArtState};
+
 /// NoiseField generates procedural noise for the visualization.
 /// This will be supplemented/replaced by SD-generated textures.
 #[wasm_bindgen]
