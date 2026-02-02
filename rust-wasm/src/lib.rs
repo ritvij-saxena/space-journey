@@ -8,10 +8,99 @@ pub use art_data::{ArtData, ArtState};
 mod curl_noise;
 mod physics;
 mod particle_system;
+pub use particle_system::ParticleSystem;
 mod morph_controller;
 pub use morph_controller::{MorphController, MorphPhase, MorphConfig, TransitionPattern};
 mod weather_params;
 pub use weather_params::{WeatherData, WeatherInfluence, WeatherMapper};
+
+/// WASM-bindgen wrapper for ParticleSystem
+/// Provides JavaScript-compatible API for the particle physics engine
+#[wasm_bindgen]
+pub struct WasmParticleSystem {
+    inner: ParticleSystem,
+}
+
+#[wasm_bindgen]
+impl WasmParticleSystem {
+    /// Create a new particle system
+    ///
+    /// # Arguments
+    /// * `num_particles` - Number of particles to create
+    /// * `seed` - Random seed for deterministic behavior
+    /// * `num_states` - Number of art states for morphing
+    #[wasm_bindgen(constructor)]
+    pub fn new(num_particles: u32, seed: u32, num_states: u32) -> WasmParticleSystem {
+        console::log_1(&format!("Creating ParticleSystem with {} particles, {} states", num_particles, num_states).into());
+        WasmParticleSystem {
+            inner: ParticleSystem::new(num_particles as usize, seed, num_states as usize),
+        }
+    }
+
+    /// Load art state positions for morphing
+    ///
+    /// # Arguments
+    /// * `state_index` - Index of the art state (0-based)
+    /// * `positions` - Flattened array of positions [x,y,z,x,y,z,...]
+    pub fn load_art_state(&mut self, state_index: u32, positions: &[f32]) {
+        self.inner.load_art_state(state_index as usize, positions);
+    }
+
+    /// Update particle simulation for one frame
+    ///
+    /// # Arguments
+    /// * `dt` - Time delta in seconds (typically 1/60 for 60fps)
+    pub fn update(&mut self, dt: f32) {
+        self.inner.update(dt);
+    }
+
+    /// Get all particle positions as a flat array
+    ///
+    /// Returns: [x,y,z,x,y,z,...] for all particles
+    pub fn get_positions(&self) -> Box<[f32]> {
+        self.inner.get_positions()
+    }
+
+    /// Get all particle colors as a flat array
+    ///
+    /// Returns: [r,g,b,r,g,b,...] for all particles (currently white)
+    pub fn get_colors(&self) -> Box<[f32]> {
+        self.inner.get_colors()
+    }
+
+    /// Update weather data affecting physics
+    ///
+    /// # Arguments
+    /// * `temperature` - Temperature in Celsius
+    /// * `humidity` - Humidity percentage (0-100)
+    /// * `wind_speed` - Wind speed in km/h
+    /// * `wind_direction` - Wind direction in degrees (0-360)
+    pub fn set_weather(&mut self, temperature: f32, humidity: f32, wind_speed: f32, wind_direction: f32) {
+        self.inner.set_weather(temperature, humidity, wind_speed, wind_direction);
+    }
+
+    /// Update physics parameters manually
+    ///
+    /// # Arguments
+    /// * `spring_stiffness` - Spring force strength
+    /// * `damping` - Velocity damping factor
+    /// * `curl_strength` - Curl noise influence strength
+    pub fn set_physics_params(&mut self, spring_stiffness: f32, damping: f32, curl_strength: f32) {
+        self.inner.set_physics_params(spring_stiffness, damping, curl_strength);
+    }
+
+    /// Get number of particles in the system
+    pub fn particle_count(&self) -> u32 {
+        self.inner.particle_count() as u32
+    }
+
+    /// Get current morph phase
+    ///
+    /// Returns: 0=Coalescing, 1=Holding, 2=Dissolving, 3=Reforming
+    pub fn get_morph_phase(&self) -> u8 {
+        self.inner.get_morph_phase()
+    }
+}
 
 /// NoiseField generates procedural noise for the visualization.
 /// This will be supplemented/replaced by SD-generated textures.
