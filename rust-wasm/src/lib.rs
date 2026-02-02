@@ -7,6 +7,8 @@ pub use art_data::{ArtData, ArtState};
 
 mod curl_noise;
 mod physics;
+mod morph_controller;
+pub use morph_controller::{MorphController, MorphPhase, MorphConfig, TransitionPattern};
 
 /// NoiseField generates procedural noise for the visualization.
 /// This will be supplemented/replaced by SD-generated textures.
