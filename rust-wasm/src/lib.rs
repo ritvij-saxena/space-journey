@@ -5,6 +5,9 @@ use noise::{NoiseFn, Perlin, Fbm};
 mod art_data;
 pub use art_data::{ArtData, ArtState};
 
+mod curl_noise;
+mod physics;
+
 /// NoiseField generates procedural noise for the visualization.
 /// This will be supplemented/replaced by SD-generated textures.
 #[wasm_bindgen]
