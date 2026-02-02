@@ -7,6 +7,7 @@ pub use art_data::{ArtData, ArtState};
 
 mod curl_noise;
 mod physics;
+mod particle_system;
 mod morph_controller;
 pub use morph_controller::{MorphController, MorphPhase, MorphConfig, TransitionPattern};
 
