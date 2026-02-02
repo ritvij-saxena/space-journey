@@ -10,6 +10,8 @@ mod physics;
 mod particle_system;
 mod morph_controller;
 pub use morph_controller::{MorphController, MorphPhase, MorphConfig, TransitionPattern};
+mod weather_params;
+pub use weather_params::{WeatherData, WeatherInfluence, WeatherMapper};
 
 /// NoiseField generates procedural noise for the visualization.
 /// This will be supplemented/replaced by SD-generated textures.
