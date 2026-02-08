@@ -14,9 +14,9 @@ pub struct PhysicsParams {
 impl Default for PhysicsParams {
     fn default() -> Self {
         PhysicsParams {
-            spring_stiffness: 1.0,
-            damping: 0.08,
-            curl_strength: 0.8,
+            spring_stiffness: 0.06,  // Very soft springs - liquid drift toward targets
+            damping: 0.012,          // Low damping - particles carry momentum
+            curl_strength: 0.8,      // Gentle curl noise - smooth flowing turbulence
             dt: 1.0 / 60.0,
         }
     }

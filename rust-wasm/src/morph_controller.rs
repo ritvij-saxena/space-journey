@@ -41,11 +41,11 @@ pub struct MorphConfig {
 impl Default for MorphConfig {
     fn default() -> Self {
         MorphConfig {
-            coalesce_duration: 3.0,
-            hold_duration_base: 7.0,
-            hold_duration_variance: 3.0,
-            dissolve_duration: 2.5,
-            reform_duration: 3.0,
+            coalesce_duration: 8.0,
+            hold_duration_base: 12.0,
+            hold_duration_variance: 5.0,
+            dissolve_duration: 6.0,
+            reform_duration: 8.0,
         }
     }
 }
@@ -216,7 +216,7 @@ impl MorphController {
         };
 
         // Apply stagger to transition progress
-        let stagger_amount = 0.3; // Max delay as fraction of transition
+        let stagger_amount = 0.5; // Max delay as fraction of transition — more organic spread
         let staggered_progress = ((self.transition_progress - stagger_offset * stagger_amount) / (1.0 - stagger_offset * stagger_amount))
             .clamp(0.0, 1.0);
 
@@ -242,8 +242,8 @@ impl MorphController {
 
         // Add breathing motion during hold phase
         if self.phase == MorphPhase::Holding {
-            let breath_amount = 0.02; // Subtle 2% displacement
-            let breath_speed = 0.5;
+            let breath_amount = 0.04; // Subtle displacement for living feel
+            let breath_speed = 0.3;  // Slower breathing cycle
             let breath = (self.time_accumulator * breath_speed).sin() * breath_amount;
 
             // Apply breathing based on particle position (creates organic variation)
@@ -259,6 +259,16 @@ impl MorphController {
     /// Get current phase
     pub fn phase(&self) -> &MorphPhase {
         &self.phase
+    }
+
+    /// Get current art state index
+    pub fn current_state_index(&self) -> usize {
+        self.current_state_index
+    }
+
+    /// Get next art state index
+    pub fn next_state_index(&self) -> usize {
+        self.next_state_index
     }
 
     /// Check if currently transitioning between states
@@ -349,20 +359,20 @@ mod tests {
         // Start in Coalescing
         assert_eq!(*controller.phase(), MorphPhase::Coalescing);
 
-        // Advance through coalescing
-        controller.update(3.0);
+        // Advance through coalescing (8s duration)
+        controller.update(8.0);
         assert_eq!(*controller.phase(), MorphPhase::Holding);
 
         // Advance through holding
         controller.update(controller.hold_target);
         assert_eq!(*controller.phase(), MorphPhase::Dissolving);
 
-        // Advance through dissolving
-        controller.update(2.5);
+        // Advance through dissolving (6s duration)
+        controller.update(6.0);
         assert_eq!(*controller.phase(), MorphPhase::Reforming);
 
-        // Advance through reforming
-        controller.update(3.0);
+        // Advance through reforming (8s duration)
+        controller.update(8.0);
         assert_eq!(*controller.phase(), MorphPhase::Holding);
     }
 

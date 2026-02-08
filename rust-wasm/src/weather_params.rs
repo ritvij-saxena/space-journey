@@ -68,9 +68,9 @@ impl WeatherMapper {
             .clamp(0.0, 1.0);
 
         // Temperature affects speed and turbulence
-        // Warmer = more energetic motion
-        let curl_strength = 0.5 + temp_norm * 1.0; // Range: 0.5 to 1.5
-        let turbulence_frequency = 0.8 + temp_norm * 0.8; // Range: 0.8 to 1.6
+        // Warmer = more energetic motion, but keep it gentle for meditative feel
+        let curl_strength = 0.6 + temp_norm * 0.6; // Range: 0.6 to 1.2 (gentle swirling)
+        let turbulence_frequency = 0.3 + temp_norm * 0.3; // Range: 0.3 to 0.6 (larger, slower swirls)
 
         // Wind affects drift and stability
         // Convert wind direction to unit vector in XZ plane (Y is up)
@@ -78,19 +78,19 @@ impl WeatherMapper {
         let wind_x = wind_rad.cos();
         let wind_z = wind_rad.sin();
 
-        // Scale by wind strength (max force = 0.3)
-        let wind_force_magnitude = wind_norm * 0.3;
+        // Scale by wind strength (max force = 0.15)
+        let wind_force_magnitude = wind_norm * 0.15;
         let wind_force = [
             wind_x * wind_force_magnitude,
             0.0, // No vertical wind force
             wind_z * wind_force_magnitude,
         ];
 
-        // Wind reduces spring stiffness (harder to maintain formation)
-        let spring_stiffness = 1.5 * (1.0 - wind_norm * 0.3); // Range: 1.05 to 1.5
+        // Very soft springs — particles drift gently toward targets, never snap
+        let spring_stiffness = 0.05 + wind_norm * 0.03; // Range: 0.05 to 0.08 (liquid drift)
 
-        // Humidity increases damping (heavier air)
-        let damping = 0.06 + humidity_norm * 0.06; // Range: 0.06 to 0.12
+        // Very low damping for fluid, flowing motion with more momentum
+        let damping = 0.008 + humidity_norm * 0.015; // Range: 0.008 to 0.023
 
         WeatherInfluence {
             curl_strength,
@@ -150,7 +150,7 @@ mod tests {
             wind_direction: 0.0,
         };
         let cold_influence = mapper.map_to_physics(&cold);
-        assert!((cold_influence.curl_strength - 0.5).abs() < 0.01);
+        assert!((cold_influence.curl_strength - 0.6).abs() < 0.01);
 
         // Hot weather
         let hot = WeatherData {
@@ -160,7 +160,7 @@ mod tests {
             wind_direction: 0.0,
         };
         let hot_influence = mapper.map_to_physics(&hot);
-        assert!((hot_influence.curl_strength - 1.5).abs() < 0.01);
+        assert!((hot_influence.curl_strength - 1.2).abs() < 0.01);
     }
 
     #[test]
@@ -175,7 +175,7 @@ mod tests {
             wind_direction: 0.0,
         };
         let calm_influence = mapper.map_to_physics(&calm);
-        assert!((calm_influence.spring_stiffness - 1.5).abs() < 0.01);
+        assert!((calm_influence.spring_stiffness - 0.05).abs() < 0.01);
         assert!((calm_influence.wind_force[0]).abs() < 0.01);
 
         // Strong wind from north (0 degrees)
@@ -186,8 +186,8 @@ mod tests {
             wind_direction: 0.0,
         };
         let windy_influence = mapper.map_to_physics(&windy);
-        assert!(windy_influence.spring_stiffness < 1.5);
-        assert!(windy_influence.wind_force[0].abs() > 0.0); // X component from direction
+        assert!((windy_influence.spring_stiffness - 0.08).abs() < 0.01);
+        assert!(windy_influence.wind_force[0].abs() > 0.0);
 
         // Wind from east (90 degrees)
         let east_wind = WeatherData {
@@ -197,7 +197,7 @@ mod tests {
             wind_direction: 90.0,
         };
         let east_influence = mapper.map_to_physics(&east_wind);
-        assert!(east_influence.wind_force[2].abs() > 0.0); // Z component from direction
+        assert!(east_influence.wind_force[2].abs() > 0.0);
     }
 
     #[test]
@@ -212,7 +212,7 @@ mod tests {
             wind_direction: 0.0,
         };
         let dry_influence = mapper.map_to_physics(&dry);
-        assert!((dry_influence.damping - 0.06).abs() < 0.01);
+        assert!((dry_influence.damping - 0.008).abs() < 0.002);
 
         // Very humid
         let humid = WeatherData {
@@ -222,7 +222,7 @@ mod tests {
             wind_direction: 0.0,
         };
         let humid_influence = mapper.map_to_physics(&humid);
-        assert!((humid_influence.damping - 0.12).abs() < 0.01);
+        assert!((humid_influence.damping - 0.023).abs() < 0.002);
     }
 
     #[test]
@@ -240,10 +240,10 @@ mod tests {
         let influence = mapper.map_to_physics(&extreme);
 
         // Should not panic and should produce reasonable values
-        assert!(influence.curl_strength >= 0.5 && influence.curl_strength <= 1.5);
-        assert!(influence.spring_stiffness >= 1.05 && influence.spring_stiffness <= 1.5);
-        assert!(influence.damping >= 0.06 && influence.damping <= 0.12);
-        assert!(influence.wind_force[0].abs() <= 0.3);
-        assert!(influence.wind_force[2].abs() <= 0.3);
+        assert!(influence.curl_strength >= 0.6 && influence.curl_strength <= 1.2);
+        assert!(influence.spring_stiffness >= 0.05 && influence.spring_stiffness <= 0.08);
+        assert!(influence.damping >= 0.008 && influence.damping <= 0.023);
+        assert!(influence.wind_force[0].abs() <= 0.2);
+        assert!(influence.wind_force[2].abs() <= 0.2);
     }
 }
