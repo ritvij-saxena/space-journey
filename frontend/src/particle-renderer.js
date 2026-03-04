@@ -147,9 +147,10 @@ export class ParticleRenderer {
       positions[i3 + 2] = wasmData[i4 + 2];
 
       // Size from WASM — tuned for 5000-particle AdditiveBlending density
-      // At *80 each particle was ~150px, causing ~180 overlaps/pixel → additive saturation to white
-      // At *8 each particle is ~15px, ~2 avg overlaps/pixel → art colors visible
-      sizes[i] = wasmData[i4 + 3] * 8;
+      // *80 → ~150px particles, ~180 overlaps/px → white saturation
+      // *8  → ~15px particles, ~2 overlaps/px → visible as individual flies
+      // *20 → ~37px particles, ~12 overlaps/px → soft cloud with visible colors
+      sizes[i] = wasmData[i4 + 3] * 20;
     }
 
     // Use WASM art colors if provided, otherwise keep existing colors
