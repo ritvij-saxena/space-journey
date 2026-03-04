@@ -10,6 +10,8 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { ChromaticAberrationShader } from "./shaders/chromatic-aberration.js";
+import { AfterimagePass } from "three/addons/postprocessing/AfterimagePass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
 export class PostProcessor {
   constructor(renderer, scene, camera) {
@@ -19,6 +21,8 @@ export class PostProcessor {
     this.composer = null;
     this.bloomPass = null;
     this.chromaticPass = null;
+    this.afterimagePass = null;
+    this.outputPass = null;
 
     this.init();
   }
@@ -27,27 +31,34 @@ export class PostProcessor {
     const width = window.innerWidth;
     const height = window.innerHeight;
 
-    // Create effect composer
     this.composer = new EffectComposer(this.renderer);
 
-    // Render pass (base scene)
+    // Pass 1: Render the 3D scene
     const renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(renderPass);
 
-    // Bloom pass at half resolution for performance
+    // Pass 2: Afterimage trails BEFORE bloom (so trails also glow)
+    this.afterimagePass = new AfterimagePass(0.88);
+    this.composer.addPass(this.afterimagePass);
+
+    // Pass 3: Bloom on accumulated trails + current frame
     this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(width / 2, height / 2),
-      0.8, // strength
-      0.5, // radius
-      0.6  // threshold
+      new THREE.Vector2(width, height),
+      0.4,   // strength (was 0.15 — increased for visible cluster glow)
+      0.3,   // radius (was 0.2 — tight halos around dense areas)
+      0.2    // threshold (was 0.95 — lowered so AdditiveBlending luminance triggers bloom)
     );
     this.composer.addPass(this.bloomPass);
 
-    // Chromatic aberration pass for dreamy effect - boosted
+    // Pass 4: Chromatic aberration for dreamy aesthetic
     this.chromaticPass = new ShaderPass(ChromaticAberrationShader);
     this.chromaticPass.uniforms.uIntensity.value = 0.006;
     this.chromaticPass.uniforms.uRadialFalloff.value = 1.5;
     this.composer.addPass(this.chromaticPass);
+
+    // Pass 5: REQUIRED — sRGB color space conversion (Three.js r152+ requirement)
+    this.outputPass = new OutputPass();
+    this.composer.addPass(this.outputPass);
   }
 
   /**
@@ -57,15 +68,13 @@ export class PostProcessor {
   updateParams(params = {}) {
     const { intensity = 0.5, warmth = 0.5 } = params;
 
-    // Adjust bloom based on activity - stronger range
     if (this.bloomPass) {
-      this.bloomPass.strength = 1.8 + intensity * 0.6;
-      this.bloomPass.radius = 0.5 + warmth * 0.3;
+      this.bloomPass.strength = 0.3 + intensity * 0.2;
+      this.bloomPass.radius = 0.2 + warmth * 0.2;
     }
 
-    // More visible chromatic aberration
     if (this.chromaticPass) {
-      this.chromaticPass.uniforms.uIntensity.value = 0.004 + intensity * 0.004;
+      this.chromaticPass.uniforms.uIntensity.value = 0.003 + intensity * 0.003;
     }
   }
 
@@ -79,8 +88,7 @@ export class PostProcessor {
     this.composer.setSize(width, height);
 
     if (this.bloomPass) {
-      // Bloom at half resolution for performance
-      this.bloomPass.resolution.set(width / 2, height / 2);
+      this.bloomPass.resolution.set(width, height);
     }
   }
 
@@ -126,5 +134,26 @@ export class PostProcessor {
     if (this.chromaticPass) {
       this.chromaticPass.uniforms.uIntensity.value = intensity;
     }
+  }
+
+  /**
+   * Set afterimage trail persistence
+   * @param {number} damp - Trail damp factor (0.0=no trail, 0.98=very long trail)
+   */
+  setTrailDamp(damp) {
+    if (this.afterimagePass) {
+      this.afterimagePass.uniforms['damp'].value = Math.max(0, Math.min(0.98, damp));
+    }
+  }
+
+  /**
+   * Get current trail damp value
+   * @returns {number}
+   */
+  getTrailDamp() {
+    if (this.afterimagePass) {
+      return this.afterimagePass.uniforms['damp'].value;
+    }
+    return 0;
   }
 }
