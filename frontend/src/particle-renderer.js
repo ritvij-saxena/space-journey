@@ -116,7 +116,7 @@ export class ParticleRenderer {
       fragmentShader,
       transparent: true,
       depthWrite: false,
-      blending: THREE.NormalBlending,
+      blending: THREE.AdditiveBlending,
     });
 
     this.mesh = new THREE.Points(this.geometry, this.material);
