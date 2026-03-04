@@ -7,7 +7,7 @@
 
 import * as THREE from "three";
 
-const PARTICLE_COUNT = 15000;
+const PARTICLE_COUNT = 5000;  // Must match CONFIG.particleCount in main.js
 
 // Vertex shader for particles
 const vertexShader = `
@@ -16,6 +16,7 @@ const vertexShader = `
 
   varying vec3 vColor;
   varying float vSize;
+  varying float vDepth;
 
   uniform float uTime;
   uniform float uPixelRatio;
@@ -25,6 +26,7 @@ const vertexShader = `
     vSize = size;
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vDepth = -mvPosition.z;
     gl_PointSize = size * uPixelRatio * (300.0 / -mvPosition.z);
     gl_Position = projectionMatrix * mvPosition;
   }
@@ -34,6 +36,7 @@ const vertexShader = `
 const fragmentShader = `
   varying vec3 vColor;
   varying float vSize;
+  varying float vDepth;
 
   uniform float uTime;
 
@@ -46,14 +49,18 @@ const fragmentShader = `
     float alpha = 1.0 - smoothstep(0.0, 0.5, dist);
     alpha *= alpha; // Softer edges
 
-    // Add subtle glow
-    float glow = exp(-dist * 4.0) * 0.5;
+    // Depth fade: distant particles appear dimmer
+    float depthFade = 1.0 - smoothstep(1.5, 6.0, vDepth);
+    alpha *= mix(0.35, 1.0, depthFade);
+
+    // Subtle glow that doesn't wash out color
+    float glow = exp(-dist * 6.0) * 0.2;
 
     vec3 col = vColor + vColor * glow;
 
-    if (alpha < 0.01) discard;
+    if (alpha < 0.005) discard;
 
-    gl_FragColor = vec4(col, alpha * 0.85);
+    gl_FragColor = vec4(col, alpha * 0.28);
   }
 `;
 
@@ -93,7 +100,7 @@ export class ParticleRenderer {
       colors[i3 + 1] = 0.3 + Math.random() * 0.4;
       colors[i3 + 2] = 0.4 + Math.random() * 0.5;
 
-      sizes[i] = 15 + Math.random() * 10;
+      sizes[i] = 2 + Math.random() * 2;
     }
 
     this.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -109,7 +116,7 @@ export class ParticleRenderer {
       fragmentShader,
       transparent: true,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
     });
 
     this.mesh = new THREE.Points(this.geometry, this.material);
@@ -119,8 +126,9 @@ export class ParticleRenderer {
    * Update particle positions from WASM-generated data
    * @param {Float32Array} wasmData - Particle data [x, y, z, size, ...]
    * @param {number} time - Current time for color animation
+   * @param {Float32Array} [wasmColors] - Optional per-particle colors [r,g,b,...] from WASM
    */
-  updateFromWasm(wasmData, time) {
+  updateFromWasm(wasmData, time, wasmColors) {
     if (!wasmData || wasmData.length === 0) return;
 
     const positions = this.geometry.attributes.position.array;
@@ -138,20 +146,17 @@ export class ParticleRenderer {
       positions[i3 + 1] = wasmData[i4 + 1];
       positions[i3 + 2] = wasmData[i4 + 2];
 
-      // Size from WASM
-      sizes[i] = wasmData[i4 + 3] * 800;
+      // Size from WASM — smaller for dense 5000-particle point clouds
+      sizes[i] = wasmData[i4 + 3] * 80;
+    }
 
-      // Sample color from art texture based on position
-      if (this.artTexture && this.artTexture.image) {
-        const color = this.sampleArtColor(
-          positions[i3],
-          positions[i3 + 1],
-          positions[i3 + 2],
-          time
-        );
-        colors[i3] = color.r;
-        colors[i3 + 1] = color.g;
-        colors[i3 + 2] = color.b;
+    // Use WASM art colors if provided, otherwise keep existing colors
+    if (wasmColors && wasmColors.length >= count * 3) {
+      for (let i = 0; i < count; i++) {
+        const i3 = i * 3;
+        colors[i3] = wasmColors[i3];
+        colors[i3 + 1] = wasmColors[i3 + 1];
+        colors[i3 + 2] = wasmColors[i3 + 2];
       }
     }
 
