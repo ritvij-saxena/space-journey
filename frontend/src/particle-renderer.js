@@ -146,8 +146,10 @@ export class ParticleRenderer {
       positions[i3 + 1] = wasmData[i4 + 1];
       positions[i3 + 2] = wasmData[i4 + 2];
 
-      // Size from WASM — smaller for dense 5000-particle point clouds
-      sizes[i] = wasmData[i4 + 3] * 80;
+      // Size from WASM — tuned for 5000-particle AdditiveBlending density
+      // At *80 each particle was ~150px, causing ~180 overlaps/pixel → additive saturation to white
+      // At *8 each particle is ~15px, ~2 avg overlaps/pixel → art colors visible
+      sizes[i] = wasmData[i4 + 3] * 8;
     }
 
     // Use WASM art colors if provided, otherwise keep existing colors
