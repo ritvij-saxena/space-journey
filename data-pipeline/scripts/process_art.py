@@ -2,11 +2,12 @@
 """
 Art States Data Pipeline
 
-Transforms art images into 3D particle target coordinates using:
-1. CLIP feature extraction
-2. UMAP dimensionality reduction to 3D
-3. K-means color extraction
-4. Binary export for WASM consumption
+Transforms art images into dense 3D point clouds using:
+1. CLIP feature extraction for morph ordering
+2. MiDaS monocular depth estimation for Z coordinates
+3. Uniform sampling for per-pixel positions and colors
+4. Greedy nearest-neighbor CLIP ordering for smooth transitions
+5. Binary v2 export for WASM consumption
 """
 
 import argparse
@@ -15,15 +16,14 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
+import cv2
 import numpy as np
 import torch
 import yaml
 from PIL import Image
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
+from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor
-from umap import UMAP
 
 
 def load_config(config_path: Path) -> dict:
@@ -87,123 +87,210 @@ def extract_clip_features(
     return np.array(features)
 
 
-def reduce_to_3d(
-    features: np.ndarray,
-    n_neighbors: int,
-    min_dist: float,
-    random_state: int
-) -> np.ndarray:
+def load_midas_model(model_type: str, device: str):
     """
-    Reduce high-dimensional features to 3D using UMAP.
+    Load MiDaS depth estimation model via PyTorch Hub.
 
     Args:
-        features: Array of shape (N, D) where D is feature dimension
-        n_neighbors: UMAP n_neighbors parameter (will be adapted)
-        min_dist: UMAP min_dist parameter
-        random_state: Random seed for reproducibility
+        model_type: MiDaS model variant (e.g. "DPT_Large", "DPT_Hybrid", "MiDaS_small")
+        device: 'cpu' or 'cuda'
 
     Returns:
-        Array of shape (N, 3) containing 3D coordinates
+        (model, transform) tuple
     """
-    n_samples = features.shape[0]
+    print(f"Loading MiDaS model: {model_type}")
+    model = torch.hub.load("intel-isl/MiDaS", model_type)
+    model.to(device).eval()
 
-    # Adapt n_neighbors based on dataset size
-    # UMAP requires n_neighbors < n_samples
-    adaptive_neighbors = max(3, min(n_samples // 2, n_neighbors))
+    midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+    if model_type in ("DPT_Large", "DPT_Hybrid"):
+        transform = midas_transforms.dpt_transform
+    else:
+        transform = midas_transforms.small_transform
 
-    print(f"Normalizing features with StandardScaler...")
-    scaler = StandardScaler()
-    features_normalized = scaler.fit_transform(features)
+    return model, transform
 
-    print(f"Reducing to 3D with UMAP (n_neighbors={adaptive_neighbors})...")
-    reducer = UMAP(
-        n_components=3,
-        n_neighbors=adaptive_neighbors,
-        min_dist=min_dist,
-        random_state=random_state,
-        verbose=True
+
+def extract_depth_map(image_rgb_np: np.ndarray, midas_model, midas_transform, device: str) -> np.ndarray:
+    """
+    Extract normalized depth map from an RGB image using MiDaS.
+
+    Args:
+        image_rgb_np: numpy array (H, W, 3) in RGB uint8
+        midas_model: loaded MiDaS model
+        midas_transform: MiDaS preprocessing transform
+        device: 'cpu' or 'cuda'
+
+    Returns:
+        Normalized depth map as numpy array (H, W) in [0, 1] range
+    """
+    # MiDaS expects BGR input (cv2 format)
+    img_bgr = cv2.cvtColor(image_rgb_np, cv2.COLOR_RGB2BGR)
+
+    input_batch = midas_transform(img_bgr).to(device)
+
+    with torch.inference_mode():
+        prediction = midas_model(input_batch)
+
+        # Resize to original image dimensions
+        prediction = torch.nn.functional.interpolate(
+            prediction.unsqueeze(1),
+            size=image_rgb_np.shape[:2],
+            mode="bicubic",
+            align_corners=False,
+        ).squeeze()
+
+    depth_map = prediction.cpu().numpy()
+
+    # Normalize depth to [0, 1]
+    d_min = depth_map.min()
+    d_max = depth_map.max()
+    if d_max - d_min > 0:
+        depth_normalized = (depth_map - d_min) / (d_max - d_min)
+    else:
+        depth_normalized = np.zeros_like(depth_map)
+
+    return depth_normalized
+
+
+def sample_points_content_aware(
+    image_rgb: np.ndarray,
+    depth_map: np.ndarray,
+    num_points: int,
+    edge_weight: float = 0.5,
+    saliency_weight: float = 0.3,
+    uniform_floor: float = 0.2,
+    rng: np.random.Generator = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Sample points weighted by visual interest: edges + color saliency.
+
+    Dense clusters appear along contours and vivid areas, creating
+    particle formations that reflect the actual artwork composition.
+
+    Args:
+        image_rgb: (H, W, 3) uint8 RGB
+        depth_map: (H, W) float32 in [0, 1]
+        num_points: Number of points to sample
+        edge_weight: Contribution of edge map to interest (0-1)
+        saliency_weight: Contribution of color saliency to interest (0-1)
+        uniform_floor: Minimum baseline probability for all pixels (0-1)
+        rng: numpy random generator (for reproducibility)
+
+    Returns:
+        (positions, colors) as float32 arrays of shape (num_points, 3)
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    H, W = depth_map.shape
+
+    # Edge map: Canny edges blurred for soft probability gradient
+    gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 40, 120).astype(np.float32)
+    edges = cv2.GaussianBlur(edges, (9, 9), 3)
+
+    # Color saliency: saturation × brightness in HSV
+    # High saturation + high brightness = visually interesting area
+    hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
+    saliency = (hsv[:, :, 1] / 255.0) * (hsv[:, :, 2] / 255.0)
+
+    # Normalize each map to [0, 1]
+    edge_norm = edges / (edges.max() + 1e-8)
+    sal_norm = saliency / (saliency.max() + 1e-8)
+
+    # Combine: weighted sum + uniform floor so sparse backgrounds still sample
+    interest = (edge_weight * edge_norm +
+                saliency_weight * sal_norm +
+                uniform_floor)
+
+    # Convert to sampling probability distribution
+    prob = interest.flatten()
+    prob = prob / prob.sum()
+
+    # Sample pixel indices according to interest distribution
+    total_pixels = H * W
+    indices = rng.choice(
+        total_pixels,
+        size=num_points,
+        replace=(num_points > total_pixels),
+        p=prob,
     )
 
-    coords_3d = reducer.fit_transform(features_normalized)
+    # Convert flat indices to 2D coordinates
+    y_sampled = (indices // W).astype(np.float32)
+    x_sampled = (indices % W).astype(np.float32)
+    z_sampled = depth_map.flat[indices].astype(np.float32)
 
-    # Normalize coordinates to [-1, 1] range for each axis
-    print("Normalizing 3D coordinates to [-1, 1] range...")
-    for axis in range(3):
-        min_val = coords_3d[:, axis].min()
-        max_val = coords_3d[:, axis].max()
-        coords_3d[:, axis] = 2 * (coords_3d[:, axis] - min_val) / (max_val - min_val) - 1
+    r_sampled = image_rgb[:, :, 0].flat[indices]
+    g_sampled = image_rgb[:, :, 1].flat[indices]
+    b_sampled = image_rgb[:, :, 2].flat[indices]
 
-    return coords_3d
+    # Normalize positions to [-1, 1]
+    x_norm = 2.0 * (x_sampled / W) - 1.0
+    y_norm = -(2.0 * (y_sampled / H) - 1.0)  # flip Y so image-top = +Y
+    z_norm = 2.0 * z_sampled - 1.0
+
+    positions = np.stack([x_norm, y_norm, z_norm], axis=-1).astype(np.float32)
+    colors = np.stack([r_sampled, g_sampled, b_sampled], axis=-1).astype(np.float32) / 255.0
+
+    return positions, colors
 
 
-def extract_dominant_colors(
-    image_paths: List[Path],
-    n_colors: int,
-    random_state: int
-) -> np.ndarray:
+def compute_greedy_order(embeddings: np.ndarray) -> List[int]:
     """
-    Extract dominant colors from each image using K-means.
+    Compute greedy nearest-neighbor tour through CLIP embedding space.
 
     Args:
-        image_paths: List of paths to image files
-        n_colors: Number of dominant colors to extract per image
-        random_state: Random seed for K-means
+        embeddings: (N, D) array of CLIP embeddings
 
     Returns:
-        Array of shape (N, n_colors, 3) containing RGB colors in [0, 1] range
+        List of indices representing tour order
     """
-    colors_list = []
+    similarity_matrix = cosine_similarity(embeddings)
 
-    print(f"Extracting {n_colors} dominant colors per image...")
-    for img_path in tqdm(image_paths):
-        # Load image and convert to RGB
-        image = Image.open(img_path).convert('RGB')
+    N = len(embeddings)
+    visited = [False] * N
+    order = [0]
+    visited[0] = True
 
-        # Reshape to pixel array: (width * height, 3)
-        pixels = np.array(image).reshape(-1, 3)
+    for _ in range(N - 1):
+        current = order[-1]
+        similarities = similarity_matrix[current].copy()
 
-        # Apply K-means
-        kmeans = KMeans(n_clusters=n_colors, random_state=random_state, n_init=10)
-        kmeans.fit(pixels)
+        # Mask visited images
+        for idx in range(N):
+            if visited[idx]:
+                similarities[idx] = -2.0
 
-        # Get cluster centers (dominant colors)
-        dominant_colors = kmeans.cluster_centers_
+        next_idx = int(np.argmax(similarities))
+        order.append(next_idx)
+        visited[next_idx] = True
 
-        # Normalize to [0, 1] range
-        dominant_colors = dominant_colors / 255.0
-
-        colors_list.append(dominant_colors)
-
-    return np.array(colors_list)
+    return order
 
 
-def export_binary(
+def export_binary_v2(
     output_path: Path,
-    coords_3d: np.ndarray,
-    colors: np.ndarray,
-    version: int = 1
+    all_positions: List[np.ndarray],
+    all_colors: List[np.ndarray],
+    version: int = 2
 ) -> None:
     """
-    Export data to binary format for WASM consumption.
+    Export enhanced art states to binary format v2.
 
     Binary format:
-    - Header: [version: i32, num_states: i32, points_per_state: i32, colors_per_state: i32]
-    - Positions: flattened 3D coords as f32 (x,y,z for each state)
-    - Colors: flattened RGB as f32 (r,g,b for each color for each state)
+    - Header (16 bytes): [version: i32, num_states: i32, points_per_state: i32, colors_per_state: i32]
+    - Positions: f32 * (num_states * points_per_state * 3)
+    - Colors: f32 * (num_states * colors_per_state * 3)
 
     All values are little-endian.
-
-    Args:
-        output_path: Path to output binary file
-        coords_3d: Array of shape (N, 3) containing 3D coordinates
-        colors: Array of shape (N, n_colors, 3) containing RGB colors
-        version: Binary format version
     """
-    num_states = coords_3d.shape[0]
-    points_per_state = 1  # For now, one seed point per art state
-    colors_per_state = colors.shape[1]
+    num_states = len(all_positions)
+    points_per_state = all_positions[0].shape[0]
+    colors_per_state = all_colors[0].shape[0]
 
-    print(f"Exporting binary data...")
+    print(f"Exporting binary v2...")
     print(f"  Version: {version}")
     print(f"  Num states: {num_states}")
     print(f"  Points per state: {points_per_state}")
@@ -214,19 +301,22 @@ def export_binary(
         header = struct.pack('<4i', version, num_states, points_per_state, colors_per_state)
         f.write(header)
 
-        # Write positions (N * 3 * f32)
-        # Convert to little-endian float32
-        positions_bytes = coords_3d.astype('<f4').tobytes()
-        f.write(positions_bytes)
+        # Write all positions (flattened)
+        for positions in all_positions:
+            f.write(positions.astype('<f4').tobytes())
 
-        # Write colors (N * colors_per_state * 3 * f32)
-        # Flatten colors array and convert to little-endian float32
-        colors_flattened = colors.reshape(-1, 3)
-        colors_bytes = colors_flattened.astype('<f4').tobytes()
-        f.write(colors_bytes)
+        # Write all colors (flattened)
+        for colors in all_colors:
+            f.write(colors.astype('<f4').tobytes())
 
-    file_size = output_path.stat().st_size
-    print(f"Binary file written: {output_path} ({file_size} bytes)")
+    # Calculate and report file size
+    header_size = 16
+    positions_size = num_states * points_per_state * 3 * 4
+    colors_size = num_states * colors_per_state * 3 * 4
+    total_size = header_size + positions_size + colors_size
+
+    print(f"  File size: {total_size:,} bytes ({total_size / 1024:.1f} KB)")
+    print(f"  Written to: {output_path}")
 
 
 def main():
@@ -264,7 +354,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("Art States Data Pipeline")
+    print("Art States Data Pipeline (Enhanced v2)")
     print("=" * 60)
     print(f"Input directory: {input_dir}")
     print(f"Output file: {output_file}")
@@ -272,46 +362,74 @@ def main():
 
     # Step 1: Discover images
     image_paths = discover_images(input_dir)
-    print(f"Found {len(image_paths)} images")
+    print(f"Found {len(image_paths)} images:")
+    for p in image_paths:
+        print(f"  - {p.name}")
     print()
 
-    # Step 2: Extract CLIP features
+    # Setup device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
+    print()
+
+    # Step 2: Extract CLIP features for morph ordering
     features = extract_clip_features(
         image_paths,
         config['clip_model'],
         device
     )
-    print(f"Extracted features shape: {features.shape}")
+    print(f"CLIP features shape: {features.shape}")
     print()
 
-    # Step 3: Reduce to 3D
-    coords_3d = reduce_to_3d(
-        features,
-        n_neighbors=config['umap']['n_neighbors'],
-        min_dist=config['umap']['min_dist'],
-        random_state=config['umap']['random_state']
+    # Step 3: Load MiDaS model once
+    midas_model, midas_transform = load_midas_model(
+        config['depth']['model'],
+        device
     )
-    print(f"3D coordinates shape: {coords_3d.shape}")
-    print(f"3D coordinates range: [{coords_3d.min():.3f}, {coords_3d.max():.3f}]")
     print()
 
-    # Step 4: Extract dominant colors
-    colors = extract_dominant_colors(
-        image_paths,
-        n_colors=config['colors']['n_colors'],
-        random_state=config['colors']['random_state']
-    )
-    print(f"Colors shape: {colors.shape}")
-    print(f"Colors range: [{colors.min():.3f}, {colors.max():.3f}]")
+    # Step 4: For each image, extract depth map and sample points
+    num_points = config['sampling']['num_points']
+    all_positions = []
+    all_colors = []
+
+    rng = np.random.default_rng(config.get('sampling', {}).get('seed', 42))
+
+    print(f"Processing images (sampling {num_points} points each)...")
+    for img_path in tqdm(image_paths):
+        # Load image as RGB numpy array
+        image_rgb = np.array(Image.open(img_path).convert('RGB'))
+
+        # Extract depth map with MiDaS
+        depth_map = extract_depth_map(image_rgb, midas_model, midas_transform, device)
+
+        # Sample points weighted by visual interest (edges + color saliency)
+        positions, colors = sample_points_content_aware(image_rgb, depth_map, num_points, rng=rng)
+
+        all_positions.append(positions)
+        all_colors.append(colors)
+
+    print(f"Processed {len(all_positions)} images")
     print()
 
-    # Step 5: Export to binary
-    export_binary(
+    # Step 5: Compute greedy morph order from CLIP embeddings
+    print("Computing morph order (greedy nearest-neighbor on CLIP cosine similarity)...")
+    order = compute_greedy_order(features)
+
+    print("Morph order:")
+    for rank, idx in enumerate(order):
+        print(f"  {rank + 1}. {image_paths[idx].name}")
+    print()
+
+    # Reorder positions AND colors by morph order
+    positions_ordered = [all_positions[i] for i in order]
+    colors_ordered = [all_colors[i] for i in order]
+
+    # Step 6: Export to binary v2
+    export_binary_v2(
         output_file,
-        coords_3d,
-        colors,
+        positions_ordered,
+        colors_ordered,
         version=config['binary']['version']
     )
 
