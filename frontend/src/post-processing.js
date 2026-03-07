@@ -38,15 +38,15 @@ export class PostProcessor {
     this.composer.addPass(renderPass);
 
     // Pass 2: Afterimage trails BEFORE bloom (so trails also glow)
-    this.afterimagePass = new AfterimagePass(0.88);
+    this.afterimagePass = new AfterimagePass(0.82);
     this.composer.addPass(this.afterimagePass);
 
     // Pass 3: Bloom on accumulated trails + current frame
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(width, height),
-      0.4,   // strength (was 0.15 — increased for visible cluster glow)
-      0.3,   // radius (was 0.2 — tight halos around dense areas)
-      0.2    // threshold (was 0.95 — lowered so AdditiveBlending luminance triggers bloom)
+      0.6,   // strength — moderate glow on bright clusters
+      0.4,   // radius — slightly wider halo
+      0.5    // threshold — only bright clusters bloom, not every pixel
     );
     this.composer.addPass(this.bloomPass);
 

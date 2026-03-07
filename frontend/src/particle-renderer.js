@@ -27,7 +27,7 @@ const vertexShader = `
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     vDepth = -mvPosition.z;
-    gl_PointSize = size * uPixelRatio * (300.0 / -mvPosition.z);
+    gl_PointSize = size * uPixelRatio * (160.0 / -mvPosition.z);
     gl_Position = projectionMatrix * mvPosition;
   }
 `;
@@ -60,7 +60,7 @@ const fragmentShader = `
 
     if (alpha < 0.005) discard;
 
-    gl_FragColor = vec4(col, alpha * 0.28);
+    gl_FragColor = vec4(col, alpha * 0.07);
   }
 `;
 
@@ -271,9 +271,9 @@ export class ParticleRenderer {
   update(time) {
     this.material.uniforms.uTime.value = time;
 
-    // Gentle rotation
-    this.mesh.rotation.y = time * 0.02;
-    this.mesh.rotation.x = Math.sin(time * 0.1) * 0.1;
+    // Very slow drift — keeps 3D depth perceptible without destroying art shapes
+    this.mesh.rotation.y = Math.sin(time * 0.04) * 0.12;
+    this.mesh.rotation.x = Math.sin(time * 0.03) * 0.06;
   }
 
   getMesh() {
