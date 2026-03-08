@@ -24,6 +24,9 @@ pub struct ParticleSystem {
     weather_mapper: WeatherMapper,
     weather: WeatherData,
     art_positions: Vec<Vec<f32>>,  // Cloned art state positions for morph interpolation
+    art_colors: Vec<Vec<f32>>,    // Per-point RGB colors for each art state
+    positions_flat: Vec<f32>,     // maintained in-place for zero-copy JS export
+    colors_flat: Vec<f32>,        // maintained in-place for zero-copy JS export
 }
 
 impl ParticleSystem {
@@ -65,6 +68,9 @@ impl ParticleSystem {
             weather_mapper,
             weather,
             art_positions: Vec::new(),
+            art_colors: Vec::new(),
+            positions_flat: vec![0.0_f32; num_particles * 3],
+            colors_flat: vec![1.0_f32; num_particles * 3],
         }
     }
 
@@ -84,6 +90,21 @@ impl ParticleSystem {
 
         // Store cloned positions for this state
         self.art_positions[state_index] = positions.to_vec();
+    }
+
+    /// Load art data colors for a specific state.
+    ///
+    /// The colors array should be flat: [r, g, b, r, g, b, ...]
+    /// Values should be in [0, 1] range.
+    ///
+    /// # Arguments
+    /// * `state_index` - Index of the art state
+    /// * `colors` - Flattened array of RGB colors
+    pub fn load_art_colors(&mut self, state_index: usize, colors: &[f32]) {
+        while self.art_colors.len() <= state_index {
+            self.art_colors.push(Vec::new());
+        }
+        self.art_colors[state_index] = colors.to_vec();
     }
 
     /// Set target positions for all particles.
@@ -137,28 +158,22 @@ impl ParticleSystem {
         // 3. Get current and next art state positions for interpolation
         // Only update targets if we have art data loaded
         if !self.art_positions.is_empty() {
-            let current_state_idx = match self.morph.phase() {
-                MorphPhase::Coalescing | MorphPhase::Holding => {
-                    // During coalesce/hold, use next_state as current
-                    // (we're moving toward or holding at next_state)
-                    0 // Will be set properly when state transitions work
-                }
-                MorphPhase::Dissolving | MorphPhase::Reforming => {
-                    0 // Placeholder - will be refined with state tracking
-                }
-            };
-
-            let next_state_idx = (current_state_idx + 1) % self.art_positions.len().max(1);
+            let current_state_idx = self.morph.current_state_index();
+            let next_state_idx = self.morph.next_state_index();
 
             // Get position arrays (or use empty if not loaded)
             let current_positions: &[f32] = if current_state_idx < self.art_positions.len() {
                 &self.art_positions[current_state_idx]
+            } else if !self.art_positions.is_empty() {
+                &self.art_positions[0]
             } else {
                 &[]
             };
 
             let next_positions: &[f32] = if next_state_idx < self.art_positions.len() {
                 &self.art_positions[next_state_idx]
+            } else if !self.art_positions.is_empty() {
+                &self.art_positions[0]
             } else {
                 &[]
             };
@@ -166,10 +181,14 @@ impl ParticleSystem {
             // Update targets for each particle based on morph interpolation
             if !current_positions.is_empty() && !next_positions.is_empty() {
                 let num_particles = self.particles.len();
+                let num_art_positions = current_positions.len() / 3;
+
                 for (i, particle) in self.particles.iter_mut().enumerate() {
+                    // Wrap particle index to available art positions
+                    let art_idx = i % num_art_positions;
                     let target = self.morph.get_target_positions(
-                        i,
-                        num_particles,
+                        art_idx,
+                        num_art_positions,
                         current_positions,
                         next_positions,
                     );
@@ -215,6 +234,49 @@ impl ParticleSystem {
             // Advance time
             self.time += substep_dt as f64;
         }
+
+        // 5. Update flat buffers in-place for zero-copy JS export (no allocation)
+        for (i, particle) in self.particles.iter().enumerate() {
+            let i3 = i * 3;
+            self.positions_flat[i3]     = particle.position[0];
+            self.positions_flat[i3 + 1] = particle.position[1];
+            self.positions_flat[i3 + 2] = particle.position[2];
+        }
+
+        // Update colors_flat from current morph state (interpolate during transitions)
+        let current_state_idx = self.morph.current_state_index();
+        let next_state_idx = self.morph.next_state_index();
+        let morph_t = self.morph.get_transition_progress();  // 0.0..=1.0 within current phase
+
+        for i in 0..self.particles.len() {
+            let i3 = i * 3;
+            let (r, g, b) = if !self.art_colors.is_empty() {
+                let cur_colors = if current_state_idx < self.art_colors.len() {
+                    &self.art_colors[current_state_idx]
+                } else {
+                    &self.art_colors[0]
+                };
+                let nxt_colors = if next_state_idx < self.art_colors.len() {
+                    &self.art_colors[next_state_idx]
+                } else {
+                    &self.art_colors[0]
+                };
+                let num_art = cur_colors.len() / 3;
+                let ci = (i % num_art) * 3;
+                let ni = (i % (nxt_colors.len() / 3)) * 3;
+                let t = morph_t.clamp(0.0, 1.0);
+                (
+                    cur_colors[ci]     + (nxt_colors[ni]     - cur_colors[ci])     * t,
+                    cur_colors[ci + 1] + (nxt_colors[ni + 1] - cur_colors[ci + 1]) * t,
+                    cur_colors[ci + 2] + (nxt_colors[ni + 2] - cur_colors[ci + 2]) * t,
+                )
+            } else {
+                (1.0, 1.0, 1.0)
+            };
+            self.colors_flat[i3]     = r;
+            self.colors_flat[i3 + 1] = g;
+            self.colors_flat[i3 + 2] = b;
+        }
     }
 
     /// Get all particle positions as a flat array for zero-copy transfer to JS.
@@ -232,18 +294,64 @@ impl ParticleSystem {
 
     /// Get particle colors as a flat array.
     ///
-    /// Currently returns white for all particles (placeholder).
-    /// Phase 3 will implement actual color mapping from art data.
+    /// Returns per-particle colors from the current art state.
+    /// Falls back to white if no art colors are loaded.
     ///
     /// Returns: [r, g, b, r, g, b, ...] where each component is 0-1
     pub fn get_colors(&self) -> Box<[f32]> {
         let mut colors = Vec::with_capacity(self.particles.len() * 3);
-        for _ in &self.particles {
-            colors.push(1.0);  // R
-            colors.push(1.0);  // G
-            colors.push(1.0);  // B
+        let current_state_idx = self.morph.current_state_index();
+
+        let art_colors = if current_state_idx < self.art_colors.len()
+            && !self.art_colors[current_state_idx].is_empty()
+        {
+            Some(&self.art_colors[current_state_idx])
+        } else {
+            None
+        };
+
+        for i in 0..self.particles.len() {
+            if let Some(ac) = art_colors {
+                let num_art_colors = ac.len() / 3;
+                let color_idx = (i % num_art_colors) * 3;
+                colors.push(ac[color_idx]);
+                colors.push(ac[color_idx + 1]);
+                colors.push(ac[color_idx + 2]);
+            } else {
+                colors.push(1.0);
+                colors.push(1.0);
+                colors.push(1.0);
+            }
         }
         colors.into_boxed_slice()
+    }
+
+    /// Return raw pointer to flat positions buffer (stable address, no allocation)
+    pub fn positions_ptr(&self) -> *const f32 {
+        self.positions_flat.as_ptr()
+    }
+
+    /// Return element count of flat positions buffer
+    pub fn positions_len(&self) -> usize {
+        self.positions_flat.len()
+    }
+
+    /// Return raw pointer to flat colors buffer
+    pub fn colors_ptr(&self) -> *const f32 {
+        self.colors_flat.as_ptr()
+    }
+
+    /// Return element count of flat colors buffer
+    pub fn colors_len(&self) -> usize {
+        self.colors_flat.len()
+    }
+
+    /// Limit simulation to first n particles (adaptive count reduction)
+    pub fn set_active_count(&mut self, n: usize) {
+        let clamped = n.min(self.particles.len());
+        self.positions_flat.truncate(clamped * 3);
+        self.colors_flat.truncate(clamped * 3);
+        self.particles.truncate(clamped);
     }
 
     /// Update weather data, which will affect physics parameters on next update.
@@ -435,6 +543,30 @@ mod tests {
         system.load_art_state(0, &positions);
 
         assert_eq!(system.art_positions[0], positions);
+    }
+
+    #[test]
+    fn load_art_colors_stores_colors() {
+        let mut system = ParticleSystem::new(10, 42, 3);
+        let colors = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+        system.load_art_colors(0, &colors);
+
+        assert_eq!(system.art_colors[0], colors);
+    }
+
+    #[test]
+    fn get_colors_returns_art_colors_when_loaded() {
+        let mut system = ParticleSystem::new(3, 42, 2);
+        let colors = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+
+        system.load_art_colors(0, &colors);
+
+        let result = system.get_colors();
+        // Should return art colors (wrapping if needed)
+        assert_eq!(result[0], 1.0); // R of first art color
+        assert_eq!(result[1], 0.0); // G of first art color
+        assert_eq!(result[2], 0.0); // B of first art color
     }
 
     #[test]

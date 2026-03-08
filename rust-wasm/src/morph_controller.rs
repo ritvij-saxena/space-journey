@@ -276,6 +276,12 @@ impl MorphController {
         matches!(self.phase, MorphPhase::Coalescing | MorphPhase::Reforming)
     }
 
+    /// Get current transition progress (0.0..=1.0 within the current phase).
+    /// Used for color interpolation in the flat buffer update path.
+    pub fn get_transition_progress(&self) -> f32 {
+        self.transition_progress
+    }
+
     /// Get tether strength multiplier
     /// Controls how strongly particles are pulled toward target positions
     ///
