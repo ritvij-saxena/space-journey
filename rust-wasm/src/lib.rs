@@ -46,6 +46,15 @@ impl WasmParticleSystem {
         self.inner.load_art_state(state_index as usize, positions);
     }
 
+    /// Load art state colors for morphing
+    ///
+    /// # Arguments
+    /// * `state_index` - Index of the art state (0-based)
+    /// * `colors` - Flattened array of RGB colors [r,g,b,r,g,b,...] in [0,1]
+    pub fn load_art_colors(&mut self, state_index: u32, colors: &[f32]) {
+        self.inner.load_art_colors(state_index as usize, colors);
+    }
+
     /// Update particle simulation for one frame
     ///
     /// # Arguments
@@ -99,6 +108,33 @@ impl WasmParticleSystem {
     /// Returns: 0=Coalescing, 1=Holding, 2=Dissolving, 3=Reforming
     pub fn get_morph_phase(&self) -> u8 {
         self.inner.get_morph_phase()
+    }
+
+    /// Return raw pointer to flat positions buffer for zero-copy JS access.
+    /// Reconstruct Float32Array view each frame: new Float32Array(memory.buffer, ptr, len)
+    pub fn get_positions_ptr(&self) -> u32 {
+        self.inner.positions_ptr() as u32
+    }
+
+    /// Return element count of positions buffer (num_particles * 3)
+    pub fn get_positions_len(&self) -> u32 {
+        self.inner.positions_len() as u32
+    }
+
+    /// Return raw pointer to flat colors buffer for zero-copy JS access.
+    pub fn get_colors_ptr(&self) -> u32 {
+        self.inner.colors_ptr() as u32
+    }
+
+    /// Return element count of colors buffer (num_particles * 3)
+    pub fn get_colors_len(&self) -> u32 {
+        self.inner.colors_len() as u32
+    }
+
+    /// Limit physics simulation and flat buffer size to n particles.
+    /// Combined with geometry.setDrawRange(0, n), reduces both CPU and GPU cost.
+    pub fn set_active_count(&mut self, n: u32) {
+        self.inner.set_active_count(n as usize);
     }
 }
 

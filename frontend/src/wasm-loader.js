@@ -6,6 +6,70 @@
 
 let wasmModule = null;
 let noiseField = null;
+let wasmBridge = null;
+
+/**
+ * WasmMemoryBridge
+ *
+ * Provides zero-copy Float32Array views directly into WASM linear memory.
+ * Pointers are captured once (stable across frames). Views are reconstructed
+ * each frame because wasmModule.memory.buffer is replaced on WASM memory growth.
+ */
+export class WasmMemoryBridge {
+  constructor(wasmModule, wasmSystem) {
+    this.wasmModule = wasmModule;
+    this.wasmSystem = wasmSystem;
+
+    // Capture pointer offsets — stable even if memory grows
+    this.posPtr = wasmSystem.get_positions_ptr();
+    this.posLen = wasmSystem.get_positions_len();
+    this.colPtr = wasmSystem.get_colors_ptr();
+    this.colLen = wasmSystem.get_colors_len();
+  }
+
+  /**
+   * Return a Float32Array view of positions in WASM memory.
+   * Called each frame to handle potential memory growth.
+   * O(1) — no copy.
+   */
+  getPositions() {
+    return new Float32Array(
+      this.wasmModule.memory.buffer,
+      this.posPtr,
+      this.posLen
+    );
+  }
+
+  /**
+   * Return a Float32Array view of colors in WASM memory.
+   * Called each frame to handle potential memory growth.
+   * O(1) — no copy.
+   */
+  getColors() {
+    return new Float32Array(
+      this.wasmModule.memory.buffer,
+      this.colPtr,
+      this.colLen
+    );
+  }
+}
+
+/**
+ * Create and return a WasmMemoryBridge for zero-copy position/color access.
+ * Must be called after initWasm() and after WasmParticleSystem is constructed.
+ */
+export function createWasmBridge(wasmSystem) {
+  if (!wasmModule) throw new Error('WASM module not initialized');
+  wasmBridge = new WasmMemoryBridge(wasmModule, wasmSystem);
+  return wasmBridge;
+}
+
+/**
+ * Get the current WasmMemoryBridge instance.
+ */
+export function getWasmBridge() {
+  return wasmBridge;
+}
 
 /**
  * Initialize the WASM module
@@ -97,6 +161,13 @@ export function getNoiseField() {
  */
 export function isWasmReady() {
   return wasmModule !== null && noiseField !== null;
+}
+
+/**
+ * Get the raw WASM module for direct access to WasmParticleSystem
+ */
+export function getWasmModule() {
+  return wasmModule;
 }
 
 /**
