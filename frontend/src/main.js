@@ -16,12 +16,72 @@ import {
   generateParticles,
   getVisualParams,
   isWasmReady,
+  getWasmModule,
+  createWasmBridge,
 } from "./wasm-loader.js";
+import { WeatherService, detectUserLocation } from "./weatherService.js";
+import { getGPUTier } from 'detect-gpu';
+import Stats from 'stats-gl';
 
 const CONFIG = {
-  particleCount: 15000,
+  particleCount: 5000,  // Match art data points per state
   sdTextureUrl: "/textures/sd_atlas.png",
+  artDataUrl: "/data/art_states.bin",
 };
+
+/**
+ * FpsAdaptor
+ *
+ * Monitors a rolling 90-frame FPS average. If sustained FPS drops below
+ * 83% of target (50fps at 60fps target), reduces particle count by 20%
+ * via setDrawRange. Applies a 120-frame (2s) cooldown between adjustments
+ * to prevent oscillation. Also calls set_active_count() on the WASM system
+ * so physics simulation matches the reduced draw count.
+ */
+class FpsAdaptor {
+  constructor(geometry, wasmSystem, maxCount) {
+    this.geometry = geometry;
+    this.wasmSystem = wasmSystem;
+    this.targetFps = 60;
+    this.windowSize = 90;
+    this.samples = [];
+    this.currentCount = maxCount;
+    this.maxCount = maxCount;
+    this.minCount = Math.max(1000, Math.floor(maxCount * 0.1));
+    this.cooldownFrames = 0;
+  }
+
+  update(deltaTime) {
+    if (deltaTime <= 0 || deltaTime > 1) return; // Skip invalid deltas
+
+    const fps = 1 / deltaTime;
+    this.samples.push(fps);
+    if (this.samples.length > this.windowSize) this.samples.shift();
+
+    if (this.cooldownFrames > 0) {
+      this.cooldownFrames--;
+      return;
+    }
+
+    if (this.samples.length < this.windowSize) return;
+
+    const avgFps = this.samples.reduce((a, b) => a + b) / this.samples.length;
+
+    if (avgFps < this.targetFps * 0.83 && this.currentCount > this.minCount) {
+      this.currentCount = Math.max(this.minCount, Math.floor(this.currentCount * 0.8));
+      this.geometry.setDrawRange(0, this.currentCount);
+      if (this.wasmSystem) {
+        this.wasmSystem.set_active_count(this.currentCount);
+      }
+      this.cooldownFrames = 120;
+      console.log(`[FpsAdaptor] Reduced to ${this.currentCount} particles (avg ${avgFps.toFixed(1)}fps)`);
+    }
+  }
+
+  getCurrentCount() {
+    return this.currentCount;
+  }
+}
 
 class UnsupervisedApp {
   constructor() {
@@ -71,6 +131,17 @@ class UnsupervisedApp {
     this.time = 0;
     this.frameCount = 0;
 
+    // New particle physics system
+    this.wasmParticleSystem = null;
+    this.weatherService = null;
+
+    // Performance optimization state
+    this.wasmBridge = null;
+    this.fpsAdaptor = null;
+    this.statsGl = null;
+    this.lastMorphPhase = -1;
+    this._pendingBridgeInit = null;
+
     this.init();
   }
 
@@ -78,10 +149,13 @@ class UnsupervisedApp {
     // Initialize WASM
     try {
       console.log("Initializing WASM...");
-      await initWasm();
+      const wasmModule = await initWasm();
       createNoiseField(Math.floor(Math.random() * 1000000));
       this.wasmReady = true;
       console.log("WASM ready - using Rust for particle computation");
+
+      // Initialize new particle physics system
+      await this.initParticlePhysics(wasmModule);
     } catch (error) {
       console.warn("WASM init failed, using JS fallback:", error);
     }
@@ -95,6 +169,30 @@ class UnsupervisedApp {
     // Create particle renderer
     this.particleRenderer = new ParticleRenderer(this.camera, this.artTexture);
     this.scene.add(this.particleRenderer.getMesh());
+
+    // Wire WASM memory bridge to ParticleRenderer (deferred from initParticlePhysics)
+    if (this._pendingBridgeInit) {
+      const { bridge, count } = this._pendingBridgeInit;
+      this.particleRenderer.initFromWasmBridge(bridge, count);
+      this.fpsAdaptor = new FpsAdaptor(
+        this.particleRenderer.geometry,
+        this.wasmParticleSystem,
+        count
+      );
+      this._pendingBridgeInit = null;
+      console.log('[Renderer] WASM bridge wired, FpsAdaptor ready');
+    }
+
+    // stats-gl overlay (only when ?debug is in URL)
+    if (new URLSearchParams(window.location.search).has('debug')) {
+      this.statsGl = new Stats({ trackGPU: true });
+      this.statsGl.init(this.renderer);
+      document.body.appendChild(this.statsGl.dom);
+      this.statsGl.dom.style.position = 'fixed';
+      this.statsGl.dom.style.top = '0';
+      this.statsGl.dom.style.left = '0';
+      console.log('[Debug] stats-gl overlay active');
+    }
 
     // Create post processor
     this.postProcessor = new PostProcessor(
@@ -130,6 +228,134 @@ class UnsupervisedApp {
         }
       );
     });
+  }
+
+  /**
+   * Initialize the new WASM particle physics system
+   */
+  async initParticlePhysics(wasmModule) {
+    try {
+      // 1. Detect GPU tier (async, runs before first frame)
+      let particleCount = CONFIG.particleCount; // fallback
+      try {
+        const gpuTier = await getGPUTier();
+        const countByTier = { 0: 1000, 1: 5000, 2: 20000, 3: 50000 };
+        particleCount = countByTier[gpuTier.tier] ?? 5000;
+        console.log(`[GPU] tier=${gpuTier.tier}, gpu="${gpuTier.gpu}", count=${particleCount}`);
+      } catch (gpuErr) {
+        console.warn('[GPU] detect-gpu failed, using default count:', gpuErr);
+      }
+
+      // 2. Load art data
+      const artData = await this.loadArtData();
+      const numStates = artData ? artData.numStates : 3;
+      const seed = 42;
+
+      console.log(`[WASM] Creating WasmParticleSystem: ${particleCount} particles, ${numStates} states`);
+      this.wasmParticleSystem = new wasmModule.WasmParticleSystem(particleCount, seed, numStates);
+
+      if (artData) {
+        for (let i = 0; i < artData.numStates; i++) {
+          this.wasmParticleSystem.load_art_state(i, artData.positions[i]);
+          this.wasmParticleSystem.load_art_colors(i, artData.colors[i]);
+        }
+        CONFIG.particleCount = particleCount;
+        console.log(`[WASM] Loaded ${numStates} art states, ${particleCount} points each`);
+      } else {
+        console.warn("No art data found, particles will float freely");
+      }
+
+      // 3. Create zero-copy memory bridge
+      this.wasmBridge = createWasmBridge(this.wasmParticleSystem);
+
+      // 4. Wire ParticleRenderer to WASM memory (must happen after particleRenderer is created)
+      // particleRenderer is created in init() after this call — defer wiring to a flag
+      this._pendingBridgeInit = { bridge: this.wasmBridge, count: particleCount };
+
+      // 5. Initialize weather service for physics influence
+      await this.initWeatherService();
+
+      console.log('[WASM] Particle physics initialized');
+    } catch (error) {
+      console.warn('[WASM] Particle physics init failed:', error);
+      this.wasmParticleSystem = null;
+    }
+  }
+
+  /**
+   * Load art states from binary file (art_states.bin)
+   * Binary format v2: header (16 bytes) + positions + colors
+   */
+  async loadArtData() {
+    try {
+      const response = await fetch(CONFIG.artDataUrl);
+      if (!response.ok) {
+        console.warn(`Art data not found at ${CONFIG.artDataUrl} (${response.status})`);
+        return null;
+      }
+
+      const buffer = await response.arrayBuffer();
+      const view = new DataView(buffer);
+
+      // Parse header (16 bytes: version, numStates, pointsPerState, colorsPerState)
+      const version = view.getInt32(0, true);
+      const numStates = view.getInt32(4, true);
+      const pointsPerState = view.getInt32(8, true);
+      const colorsPerState = view.getInt32(12, true);
+
+      console.log(`Art data header: v${version}, ${numStates} states, ${pointsPerState} pts, ${colorsPerState} colors, ${buffer.byteLength} bytes`);
+
+      // Parse positions
+      const positions = [];
+      let offset = 16;
+      for (let i = 0; i < numStates; i++) {
+        const floatCount = pointsPerState * 3;
+        const statePositions = new Float32Array(buffer, offset, floatCount);
+        positions.push(statePositions);
+        offset += floatCount * 4;
+      }
+
+      // Parse colors
+      const colors = [];
+      for (let i = 0; i < numStates; i++) {
+        const floatCount = colorsPerState * 3;
+        const stateColors = new Float32Array(buffer, offset, floatCount);
+        colors.push(stateColors);
+        offset += floatCount * 4;
+      }
+
+      return { version, numStates, pointsPerState, colorsPerState, positions, colors };
+    } catch (error) {
+      console.warn("Failed to load art data:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Initialize weather service for real-time physics influence
+   */
+  async initWeatherService() {
+    try {
+      const location = await detectUserLocation();
+      console.log(`Location: ${location.latitude.toFixed(2)}, ${location.longitude.toFixed(2)}`);
+
+      this.weatherService = new WeatherService(location.latitude, location.longitude);
+
+      // Start periodic weather updates
+      this.weatherService.startPeriodicUpdates((weatherData) => {
+        if (this.wasmParticleSystem) {
+          this.wasmParticleSystem.set_weather(
+            weatherData.temperature,
+            weatherData.humidity,
+            weatherData.windSpeed,
+            weatherData.windDirection
+          );
+          console.log("Weather applied to physics:", weatherData);
+        }
+      });
+    } catch (error) {
+      console.warn("Weather service init failed, using defaults:", error);
+    }
   }
 
   setupEventListeners() {
@@ -356,13 +582,55 @@ class UnsupervisedApp {
     if (this.wasmReady) {
       updateNoiseField(deltaTime);
 
-      // Generate particle positions in Rust/WASM
-      try {
-        const particleData = generateParticles(CONFIG.particleCount);
-        this.particleRenderer.updateFromWasm(particleData, this.time);
-      } catch (error) {
-        // Fallback to JS animation
-        this.particleRenderer.updateFallback(this.time);
+      // Debug: check particle system state
+      if (this.frameCount === 1 || this.frameCount === 60) {
+        console.log("[DEBUG] wasmParticleSystem exists:", !!this.wasmParticleSystem);
+        if (this.wasmParticleSystem) {
+          const colors = this.wasmParticleSystem.get_colors();
+          const pos = this.wasmParticleSystem.get_positions();
+          console.log(`[DEBUG] positions: len=${pos.length}, first=[${pos[0]?.toFixed(3)}, ${pos[1]?.toFixed(3)}, ${pos[2]?.toFixed(3)}]`);
+          console.log(`[DEBUG] colors: len=${colors.length}, first=[${colors[0]?.toFixed(3)}, ${colors[1]?.toFixed(3)}, ${colors[2]?.toFixed(3)}]`);
+          console.log(`[DEBUG] morph phase: ${this.wasmParticleSystem.get_morph_phase()}`);
+        }
+      }
+
+      // Use new particle physics system if available
+      if (this.wasmParticleSystem) {
+        try {
+          // Update physics simulation
+          this.wasmParticleSystem.update(deltaTime);
+
+          // Gate color uploads to morph phase changes only (reduces GPU bandwidth)
+          const morphPhase = this.wasmParticleSystem.get_morph_phase();
+          const colorsChanged = morphPhase !== this.lastMorphPhase;
+          if (colorsChanged) this.lastMorphPhase = morphPhase;
+
+          // Use zero-copy bridge if available, otherwise fall back to copy path
+          if (this.wasmBridge && this.particleRenderer.wasmBridge) {
+            this.particleRenderer.updateFromWasmBridge(colorsChanged);
+          } else {
+            const positions = this.wasmParticleSystem.get_positions();
+            const colors = this.wasmParticleSystem.get_colors();
+            const particleData = this.convertPositionsToParticleData(positions);
+            this.particleRenderer.updateFromWasm(particleData, this.time, colors);
+          }
+
+          // Adaptive FPS: reduce count if sustained below 50fps
+          if (this.fpsAdaptor) {
+            this.fpsAdaptor.update(deltaTime);
+          }
+        } catch (error) {
+          console.error("Physics update error:", error);
+          this.particleRenderer.updateFallback(this.time);
+        }
+      } else {
+        // Fallback to old noise-based generation
+        try {
+          const particleData = generateParticles(CONFIG.particleCount);
+          this.particleRenderer.updateFromWasm(particleData, this.time);
+        } catch (error) {
+          this.particleRenderer.updateFallback(this.time);
+        }
       }
 
       // Update visual parameters from weather
@@ -380,7 +648,36 @@ class UnsupervisedApp {
     this.particleRenderer.update(this.time);
 
     // Render
+    if (this.statsGl) this.statsGl.begin();
     this.postProcessor.render();
+    if (this.statsGl) this.statsGl.end();
+  }
+
+  /**
+   * Convert positions array [x,y,z,...] to particle data [x,y,z,size,...]
+   */
+  convertPositionsToParticleData(positions) {
+    const numParticles = positions.length / 3;
+    const particleData = new Float32Array(numParticles * 4);
+
+    for (let i = 0; i < numParticles; i++) {
+      const srcIdx = i * 3;
+      const dstIdx = i * 4;
+
+      particleData[dstIdx] = positions[srcIdx];         // x
+      particleData[dstIdx + 1] = positions[srcIdx + 1]; // y
+      particleData[dstIdx + 2] = positions[srcIdx + 2]; // z
+
+      // Calculate size based on position (particles near center are larger)
+      const dist = Math.sqrt(
+        positions[srcIdx] ** 2 +
+        positions[srcIdx + 1] ** 2 +
+        positions[srcIdx + 2] ** 2
+      );
+      particleData[dstIdx + 3] = 0.015 + Math.max(0, 0.01 - dist * 0.002); // size
+    }
+
+    return particleData;
   }
 }
 
