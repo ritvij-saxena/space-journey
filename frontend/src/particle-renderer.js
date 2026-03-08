@@ -103,9 +103,17 @@ export class ParticleRenderer {
       sizes[i] = 2 + Math.random() * 2;
     }
 
-    this.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    this.geometry.setAttribute('customColor', new THREE.BufferAttribute(colors, 3));
-    this.geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    const posAttr = new THREE.BufferAttribute(positions, 3);
+    posAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('position', posAttr);
+
+    const colAttr = new THREE.BufferAttribute(colors, 3);
+    colAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('customColor', colAttr);
+
+    const sizeAttr = new THREE.BufferAttribute(sizes, 1);
+    sizeAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('size', sizeAttr);
 
     this.material = new THREE.ShaderMaterial({
       uniforms: {
@@ -120,6 +128,64 @@ export class ParticleRenderer {
     });
 
     this.mesh = new THREE.Points(this.geometry, this.material);
+  }
+
+  /**
+   * Rewire BufferGeometry attributes to use WASM memory views directly.
+   * Call this once after WasmParticleSystem is created and WasmMemoryBridge is available.
+   *
+   * @param {WasmMemoryBridge} wasmBridge - Bridge providing getPositions() / getColors()
+   * @param {number} particleCount - Number of particles to render
+   */
+  initFromWasmBridge(wasmBridge, particleCount) {
+    this.wasmBridge = wasmBridge;
+    this.particleCount = particleCount;
+
+    // Get initial views (will be refreshed each frame)
+    const posView = wasmBridge.getPositions();
+    const colView = wasmBridge.getColors();
+
+    // Separate size array — constant 0.015 per particle, scaled in vertex shader
+    const sizeArray = new Float32Array(particleCount).fill(0.015);
+
+    // Replace geometry attributes with WASM-backed views + DynamicDrawUsage
+    const posAttr = new THREE.BufferAttribute(posView, 3);
+    posAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('position', posAttr);
+
+    const colAttr = new THREE.BufferAttribute(colView, 3);
+    colAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('customColor', colAttr);
+
+    const sizeAttr = new THREE.BufferAttribute(sizeArray, 1);
+    sizeAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('size', sizeAttr);
+
+    // Set initial draw range
+    this.geometry.setDrawRange(0, particleCount);
+  }
+
+  /**
+   * Update particle data from WASM memory bridge.
+   * Called every frame. Re-wraps typed array views to handle WASM memory growth.
+   * No data is copied — GPU reads directly from WASM linear memory.
+   *
+   * @param {boolean} colorsChanged - Whether to upload color buffer (gate to morph transitions)
+   */
+  updateFromWasmBridge(colorsChanged = true) {
+    if (!this.wasmBridge) return;
+
+    // Re-wrap each frame in case WASM memory grew (buffer reference may have changed)
+    this.geometry.attributes.position.array = this.wasmBridge.getPositions();
+    this.geometry.attributes.position.needsUpdate = true;
+
+    // Only upload colors when they actually changed (morph transitions)
+    if (colorsChanged) {
+      this.geometry.attributes.customColor.array = this.wasmBridge.getColors();
+      this.geometry.attributes.customColor.needsUpdate = true;
+    }
+
+    // Sizes are constant — never re-upload unless explicitly changed
   }
 
   /**
