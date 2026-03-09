@@ -145,8 +145,9 @@ export class ParticleRenderer {
     const posView = wasmBridge.getPositions();
     const colView = wasmBridge.getColors();
 
-    // Separate size array — constant 0.015 per particle, scaled in vertex shader
-    const sizeArray = new Float32Array(particleCount).fill(0.015);
+    // Size = 0.3 matches Phase 3 tuning: convertPositionsToParticleData set size≈0.015,
+    // then updateFromWasm multiplied by 20 → sizes[i]≈0.3 → ~19px particles at AdditiveBlending density
+    const sizeArray = new Float32Array(particleCount).fill(0.3);
 
     // Replace geometry attributes with WASM-backed views + DynamicDrawUsage
     const posAttr = new THREE.BufferAttribute(posView, 3);
