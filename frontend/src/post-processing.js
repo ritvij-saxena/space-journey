@@ -32,6 +32,8 @@ export class PostProcessor {
     const height = window.innerHeight;
 
     this.composer = new EffectComposer(this.renderer);
+    // Cap render resolution to 1.5x DPR — full 2x/3x DPR adds ~78% GPU cost for imperceptible gain
+    this.composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
     // Pass 1: Render the 3D scene
     const renderPass = new RenderPass(this.scene, this.camera);
@@ -43,7 +45,7 @@ export class PostProcessor {
 
     // Pass 3: Bloom on accumulated trails + current frame
     this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(width, height),
+      new THREE.Vector2(width * 0.5, height * 0.5),
       0.6,   // strength — moderate glow on bright clusters
       0.4,   // radius — slightly wider halo
       0.5    // threshold — only bright clusters bloom, not every pixel
@@ -86,9 +88,11 @@ export class PostProcessor {
     const height = window.innerHeight;
 
     this.composer.setSize(width, height);
+    this.composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
     if (this.bloomPass) {
-      this.bloomPass.resolution.set(width, height);
+      // Maintain half-resolution bloom on resize
+      this.bloomPass.resolution.set(width * 0.5, height * 0.5);
     }
   }
 
