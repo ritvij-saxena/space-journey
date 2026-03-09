@@ -4,7 +4,8 @@
  * Handles loading and initialization of the Rust/WASM noise field system.
  */
 
-let wasmModule = null;
+let wasmModule = null;      // JS namespace (for WasmParticleSystem, NoiseField classes)
+let wasmInstance = null;    // instance.exports — has .memory for zero-copy buffer access
 let noiseField = null;
 let wasmBridge = null;
 
@@ -59,8 +60,8 @@ export class WasmMemoryBridge {
  * Must be called after initWasm() and after WasmParticleSystem is constructed.
  */
 export function createWasmBridge(wasmSystem) {
-  if (!wasmModule) throw new Error('WASM module not initialized');
-  wasmBridge = new WasmMemoryBridge(wasmModule, wasmSystem);
+  if (!wasmInstance) throw new Error('WASM instance not initialized');
+  wasmBridge = new WasmMemoryBridge(wasmInstance, wasmSystem);
   return wasmBridge;
 }
 
@@ -79,7 +80,7 @@ export async function initWasm() {
 
   try {
     const wasm = await import("unsupervised-wasm/unsupervised_wasm.js");
-    await wasm.default();
+    wasmInstance = await wasm.default(); // instance.exports — has .memory for zero-copy access
     wasmModule = wasm;
     console.log("WASM module loaded successfully");
     return wasmModule;
