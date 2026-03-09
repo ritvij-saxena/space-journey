@@ -251,6 +251,12 @@ class UnsupervisedApp {
       const numStates = artData ? artData.numStates : 3;
       const seed = 42;
 
+      // Cap particle count to art data points per state — extra particles have no tether targets
+      if (artData && artData.pointsPerState < particleCount) {
+        console.log(`[GPU] Capping particle count to art data points: ${particleCount} → ${artData.pointsPerState}`);
+        particleCount = artData.pointsPerState;
+      }
+
       console.log(`[WASM] Creating WasmParticleSystem: ${particleCount} particles, ${numStates} states`);
       this.wasmParticleSystem = new wasmModule.WasmParticleSystem(particleCount, seed, numStates);
 
