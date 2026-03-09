@@ -586,20 +586,6 @@ class UnsupervisedApp {
 
     // Update particles using WASM
     if (this.wasmReady) {
-      updateNoiseField(deltaTime);
-
-      // Debug: check particle system state
-      if (this.frameCount === 1 || this.frameCount === 60) {
-        console.log("[DEBUG] wasmParticleSystem exists:", !!this.wasmParticleSystem);
-        if (this.wasmParticleSystem) {
-          const colors = this.wasmParticleSystem.get_colors();
-          const pos = this.wasmParticleSystem.get_positions();
-          console.log(`[DEBUG] positions: len=${pos.length}, first=[${pos[0]?.toFixed(3)}, ${pos[1]?.toFixed(3)}, ${pos[2]?.toFixed(3)}]`);
-          console.log(`[DEBUG] colors: len=${colors.length}, first=[${colors[0]?.toFixed(3)}, ${colors[1]?.toFixed(3)}, ${colors[2]?.toFixed(3)}]`);
-          console.log(`[DEBUG] morph phase: ${this.wasmParticleSystem.get_morph_phase()}`);
-        }
-      }
-
       // Use new particle physics system if available
       if (this.wasmParticleSystem) {
         try {
@@ -632,6 +618,7 @@ class UnsupervisedApp {
       } else {
         // Fallback to old noise-based generation
         try {
+          updateNoiseField(deltaTime);
           const particleData = generateParticles(CONFIG.particleCount);
           this.particleRenderer.updateFromWasm(particleData, this.time);
         } catch (error) {
