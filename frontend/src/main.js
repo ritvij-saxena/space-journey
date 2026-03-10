@@ -67,7 +67,7 @@ class FpsAdaptor {
 
     const avgFps = this.samples.reduce((a, b) => a + b) / this.samples.length;
 
-    if (avgFps < this.targetFps * 0.83 && this.currentCount > this.minCount) {
+    if (avgFps < this.targetFps * 0.33 && this.currentCount > this.minCount) {
       this.currentCount = Math.max(this.minCount, Math.floor(this.currentCount * 0.8));
       this.geometry.setDrawRange(0, this.currentCount);
       if (this.wasmSystem) {

@@ -220,11 +220,15 @@ impl ParticleSystem {
                 // Compute spring force with tether strength modulation
                 let spring = particle.spring_force(self.params.spring_stiffness * tether_strength);
 
-                // Combine forces: spring + curl + wind
+                // Attenuate curl when tether is active — at full tether (1.0), curl drops to 10%
+                // so spring force wins and sculptures visibly form. At tether=0, full curl drift.
+                let curl_attenuation = 1.0 - tether_strength * 0.90;
+
+                // Combine forces: spring + attenuated curl + wind
                 let total_acceleration = [
-                    spring[0] + curl[0] * self.params.curl_strength + weather_influence.wind_force[0],
-                    spring[1] + curl[1] * self.params.curl_strength + weather_influence.wind_force[1],
-                    spring[2] + curl[2] * self.params.curl_strength + weather_influence.wind_force[2],
+                    spring[0] + curl[0] * self.params.curl_strength * curl_attenuation + weather_influence.wind_force[0],
+                    spring[1] + curl[1] * self.params.curl_strength * curl_attenuation + weather_influence.wind_force[1],
+                    spring[2] + curl[2] * self.params.curl_strength * curl_attenuation + weather_influence.wind_force[2],
                 ];
 
                 // Integrate position
