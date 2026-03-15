@@ -106,13 +106,65 @@ class SpaceJourneyApp {
 
     this.clock = new THREE.Clock();
 
+    // PERF: adaptive particle system
+    this.wasmParticleSystem = null;
+    this.wasmBridge         = null;
+    this.particleRenderer   = null;
+    this.fpsAdaptor         = null;
+    this.statsGl            = null;
+
     this.init();
   }
 
-  init() {
-    // Load WASM concurrently — WasmKeplerSim becomes available for sectors
-    // that spawn after it resolves; earlier sectors fall back to static meshes.
-    initWasm().catch(e => console.warn('WASM unavailable — asteroid belt physics disabled', e));
+  async init() {
+    // ── GPU tier detection (async, completes before first particle frame) ────
+    let particleCount = 20000; // safe default for mid-range GPU
+    try {
+      const gpuTier = await getGPUTier();
+      const countByTier = { 0: 2000, 1: 8000, 2: 20000, 3: 40000 };
+      particleCount = countByTier[gpuTier.tier] ?? 20000;
+      console.log(`[GPU] tier=${gpuTier.tier}, gpu="${gpuTier.gpu}", particleCount=${particleCount}`);
+    } catch (gpuErr) {
+      console.warn('[GPU] detect-gpu failed, using default count:', gpuErr);
+    }
+
+    // ── WASM: load module then construct WasmParticleSystem ─────────────────
+    let wasmMod = null;
+    try {
+      wasmMod = await initWasm();
+    } catch (e) {
+      console.warn('WASM unavailable — particle layer disabled', e);
+    }
+
+    if (wasmMod?.WasmParticleSystem) {
+      try {
+        // Generate scene 3 (Spiral Galaxy) as the default starting scene
+        const seed = Math.floor(Math.random() * 0xffffffff);
+        this.wasmParticleSystem = new wasmMod.WasmParticleSystem(particleCount, seed, 1);
+
+        // Zero-copy memory bridge: captures stable ptr/len offsets once
+        this.wasmBridge = createWasmBridge(this.wasmParticleSystem);
+
+        // ParticleRenderer wired to WASM memory views — no copy on the hot path
+        this.particleRenderer = new ParticleRenderer(this.camera);
+        this.particleRenderer.initFromWasmBridge(this.wasmBridge, particleCount);
+        this.scene.add(this.particleRenderer.getMesh());
+
+        // FpsAdaptor monitors rolling 90-frame window; reduces count on sustained drops
+        this.fpsAdaptor = new FpsAdaptor(
+          this.particleRenderer.geometry,
+          this.wasmParticleSystem,
+          particleCount,
+        );
+
+        console.log('[WASM] ParticleRenderer wired via zero-copy bridge, FpsAdaptor ready');
+      } catch (err) {
+        console.warn('[WASM] Particle system init failed:', err);
+        this.wasmParticleSystem = null;
+        this.wasmBridge = null;
+        this.particleRenderer = null;
+      }
+    }
 
     // Bright foreground stars (spectral colors, diffraction spikes)
     this.stars = createBackgroundStars(40000);
@@ -131,7 +183,7 @@ class SpaceJourneyApp {
       this.skyDome = dome;
     });
 
-    // Procedural infinite world
+    // Procedural infinite world (uses WasmKeplerSim for asteroid belt n-body)
     this.world = new SpaceWorld(this.scene);
 
     // Auto-pilot flight controller
@@ -139,6 +191,15 @@ class SpaceJourneyApp {
 
     // Post-processing (bloom + afterimage + chromatic aberration)
     this.postProcessor = new PostProcessor(this.renderer, this.scene, this.camera);
+
+    // ── stats-gl debug overlay (only when ?debug is in the URL) ─────────────
+    if (new URLSearchParams(window.location.search).has('debug')) {
+      this.statsGl = new Stats({ trackGPU: true });
+      this.statsGl.init(this.renderer);
+      document.body.appendChild(this.statsGl.dom);
+      this.statsGl.dom.style.cssText = 'position:fixed;top:0;left:0;z-index:9999;';
+      console.log('[Debug] stats-gl overlay active');
+    }
 
     this.setupEventListeners();
     this.animate();
@@ -320,8 +381,25 @@ class SpaceJourneyApp {
     // Gravitational lensing — project BH positions to screen space
     this._updateGravLensing();
 
+    // WASM particle layer: update physics and upload positions via zero-copy bridge
+    if (this.wasmParticleSystem && this.particleRenderer) {
+      try {
+        this.wasmParticleSystem.update(Math.min(dt, 0.05));
+        this.particleRenderer.updateFromWasmBridge(true);
+      } catch (err) {
+        // Physics errors are non-fatal — space flight continues without particle layer
+      }
+    }
+
+    // Adaptive FPS: reduce particle count if sustained below 50fps
+    if (this.fpsAdaptor) {
+      this.fpsAdaptor.update(dt);
+    }
+
     // 4. Render with post-processing
+    if (this.statsGl) this.statsGl.begin();
     this.postProcessor.render();
+    if (this.statsGl) this.statsGl.end();
   }
 }
 
