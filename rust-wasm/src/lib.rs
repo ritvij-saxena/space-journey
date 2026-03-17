@@ -13,6 +13,9 @@ mod morph_controller;
 pub use morph_controller::{MorphController, MorphPhase, MorphConfig, TransitionPattern};
 mod weather_params;
 pub use weather_params::{WeatherData, WeatherInfluence, WeatherMapper};
+mod space_scenes;
+mod nbody;
+pub use nbody::WasmKeplerSim;
 
 /// WASM-bindgen wrapper for ParticleSystem
 /// Provides JavaScript-compatible API for the particle physics engine
@@ -135,6 +138,27 @@ impl WasmParticleSystem {
     /// Combined with geometry.setDrawRange(0, n), reduces both CPU and GPU cost.
     pub fn set_active_count(&mut self, n: u32) {
         self.inner.set_active_count(n as usize);
+    }
+
+    /// Generate a space scene and return interleaved [x,y,z,r,g,b, ...] for all particles.
+    ///
+    /// # Arguments
+    /// * `scene_type` - 0=Starfield, 1=Nebula, 2=BlackHole, 3=Galaxy, 4=Wormhole, 5=Cloud
+    /// * `particle_count` - Number of particles to generate
+    /// * `seed` - Random seed (different seeds = different cloud/arm shapes)
+    pub fn generate_space_scene(&self, scene_type: u32, particle_count: u32, seed: u32) -> Box<[f32]> {
+        let data = space_scenes::generate_scene(scene_type as u8, particle_count as usize, seed);
+        data.into_boxed_slice()
+    }
+
+    /// Set scene-type for physics forces (normally auto-synced from morph state).
+    pub fn set_scene_type(&mut self, scene_type: u32) {
+        self.inner.set_scene_type(scene_type as u8);
+    }
+
+    /// Get current scene type (auto-synced from morph controller each frame).
+    pub fn get_scene_type(&self) -> u32 {
+        self.inner.get_scene_type() as u32
     }
 }
 
@@ -348,5 +372,5 @@ impl NoiseField {
 
 #[wasm_bindgen]
 pub fn greet(name: &str) {
-    console::log_1(&format!("Hello, {}! Welcome to Unsupervised.", name).into());
+    console::log_1(&format!("Hello, {}! Welcome to Space Journey.", name).into());
 }

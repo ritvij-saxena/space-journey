@@ -6,19 +6,21 @@ output_file: "art_states.bin"
 # CLIP model settings
 clip_model: "openai/clip-vit-base-patch32"
 
-# UMAP settings
-umap:
-  n_components: 3
-  n_neighbors: 15  # Will be adjusted based on image count
-  min_dist: 0.1
-  random_state: 42
+# MiDaS depth estimation
+depth:
+  model: "DPT_Large"
 
-# Color extraction
-colors:
-  n_colors: 5
-  random_state: 42
+# Point sampling
+sampling:
+  num_points: 8000
+  method: "uniform"
+
+# Morph ordering
+ordering:
+  method: "greedy_nearest_neighbor"
+  metric: "cosine"
 
 # Binary format
 binary:
-  version: 1
+  version: 2
   endian: "little"

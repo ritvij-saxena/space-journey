@@ -5,6 +5,38 @@ use crate::weather_params::{WeatherData, WeatherMapper};
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 
+/// Scene-specific extra force (black hole gravity, galaxy rotation, wormhole vortex).
+/// Extracted as a free function to avoid borrow-checker conflicts inside the particle loop.
+fn space_scene_force(scene_type: u8, position: [f32; 3]) -> [f32; 3] {
+    match scene_type {
+        2 => {
+            // Black hole: radial gravity F = -k/r² inward, event horizon at r < 0.15
+            let (x, y, z) = (position[0], position[1], position[2]);
+            let r = (x * x + y * y + z * z).sqrt();
+            if r < 0.15 { return [0.0, 0.0, 0.0]; }
+            let k = 0.008;
+            let f = -k / (r * r);
+            [f * x / r, f * y / r, f * z / r]
+        }
+        3 => {
+            // Galaxy: Keplerian tangential rotation in XY plane
+            let (x, y) = (position[0], position[1]);
+            let r_xy = (x * x + y * y).sqrt().max(0.01);
+            let omega = 0.040 / r_xy.sqrt(); // differential rotation
+            // Tangential: (-y/r, x/r) × omega × r_xy
+            [-y / r_xy * omega * r_xy, x / r_xy * omega * r_xy, 0.0]
+        }
+        4 => {
+            // Wormhole: vortex F = [-y, x, -z*0.1] * strength/(r+0.1)
+            let (x, y, z) = (position[0], position[1], position[2]);
+            let r = (x * x + y * y + z * z).sqrt();
+            let s = 0.040 / (r + 0.10);
+            [-y * s, x * s, -z * 0.10 * s]
+        }
+        _ => [0.0, 0.0, 0.0],
+    }
+}
+
 /// ParticleSystem manages a collection of particles and their physics simulation.
 ///
 /// Each frame, particles are influenced by:
@@ -27,6 +59,7 @@ pub struct ParticleSystem {
     art_colors: Vec<Vec<f32>>,    // Per-point RGB colors for each art state
     positions_flat: Vec<f32>,     // maintained in-place for zero-copy JS export
     colors_flat: Vec<f32>,        // maintained in-place for zero-copy JS export
+    pub scene_type: u8,           // Current scene type (auto-synced from morph state)
 }
 
 impl ParticleSystem {
@@ -71,6 +104,7 @@ impl ParticleSystem {
             art_colors: Vec::new(),
             positions_flat: vec![0.0_f32; num_particles * 3],
             colors_flat: vec![1.0_f32; num_particles * 3],
+            scene_type: 0,
         }
     }
 
@@ -197,6 +231,10 @@ impl ParticleSystem {
             }
         }
 
+        // Sync scene_type from current morph state (auto-follows scene transitions)
+        self.scene_type = self.morph.current_state_index() as u8;
+        let scene_type = self.scene_type;
+
         // 4. Physics substeps
         let substep_dt = dt / 2.0;
 
@@ -224,11 +262,14 @@ impl ParticleSystem {
                 // so spring force wins and sculptures visibly form. At tether=0, full curl drift.
                 let curl_attenuation = 1.0 - tether_strength * 0.90;
 
-                // Combine forces: spring + attenuated curl + wind
+                // Scene-specific extra force (gravity, rotation, vortex)
+                let sf = space_scene_force(scene_type, particle.position);
+
+                // Combine forces: spring + attenuated curl + wind + scene
                 let total_acceleration = [
-                    spring[0] + curl[0] * self.params.curl_strength * curl_attenuation + weather_influence.wind_force[0],
-                    spring[1] + curl[1] * self.params.curl_strength * curl_attenuation + weather_influence.wind_force[1],
-                    spring[2] + curl[2] * self.params.curl_strength * curl_attenuation + weather_influence.wind_force[2],
+                    spring[0] + curl[0] * self.params.curl_strength * curl_attenuation + weather_influence.wind_force[0] + sf[0],
+                    spring[1] + curl[1] * self.params.curl_strength * curl_attenuation + weather_influence.wind_force[1] + sf[1],
+                    spring[2] + curl[2] * self.params.curl_strength * curl_attenuation + weather_influence.wind_force[2] + sf[2],
                 ];
 
                 // Integrate position
@@ -422,6 +463,17 @@ impl ParticleSystem {
     /// Reset simulation time (useful for testing or restarting).
     pub fn reset_time(&mut self) {
         self.time = 0.0;
+    }
+
+    /// Set scene type for scene-specific physics forces.
+    /// Auto-synced each frame from morph controller; manual override available via this method.
+    pub fn set_scene_type(&mut self, scene_type: u8) {
+        self.scene_type = scene_type;
+    }
+
+    /// Get current scene type.
+    pub fn get_scene_type(&self) -> u8 {
+        self.scene_type
     }
 }
 

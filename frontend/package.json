@@ -1,7 +1,7 @@
 {
-  "name": "unsupervised-frontend",
+  "name": "space-journey",
   "version": "0.1.0",
-  "description": "Generative art installation frontend - Unsupervised MoMA Replica",
+  "description": "Space Journey — first-person cinematic flight through procedurally generated infinite space",
   "type": "module",
   "scripts": {
     "dev": "vite",

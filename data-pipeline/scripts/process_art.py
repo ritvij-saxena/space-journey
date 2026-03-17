@@ -226,10 +226,13 @@ def sample_points_content_aware(
     g_sampled = image_rgb[:, :, 1].flat[indices]
     b_sampled = image_rgb[:, :, 2].flat[indices]
 
-    # Normalize positions to [-1, 1]
+    # Normalize positions: x,y in [-1, 1], z very shallow (0.08 factor).
+    # Shallow z prevents perspective projection from distorting the 2D painting layout —
+    # at camera z=4, full z[-1,1] creates 67% horizontal spread difference between front/back.
+    # With z in [-0.08, 0.08], that distortion drops to <4%, preserving the painting's composition.
     x_norm = 2.0 * (x_sampled / W) - 1.0
     y_norm = -(2.0 * (y_sampled / H) - 1.0)  # flip Y so image-top = +Y
-    z_norm = 2.0 * z_sampled - 1.0
+    z_norm = (2.0 * z_sampled - 1.0) * 0.08   # very shallow depth layer
 
     positions = np.stack([x_norm, y_norm, z_norm], axis=-1).astype(np.float32)
     colors = np.stack([r_sampled, g_sampled, b_sampled], axis=-1).astype(np.float32) / 255.0
@@ -403,8 +406,12 @@ def main():
         # Extract depth map with MiDaS
         depth_map = extract_depth_map(image_rgb, midas_model, midas_transform, device)
 
-        # Sample points weighted by visual interest (edges + color saliency)
-        positions, colors = sample_points_content_aware(image_rgb, depth_map, num_points, rng=rng)
+        # Sample points weighted by visual interest (edges + color saliency).
+        # uniform_floor=0.8 keeps ~1.25× density ratio (center vs background) vs 50×
+        # at 0.2 — prevents additive saturation blowout at focal points.
+        positions, colors = sample_points_content_aware(
+            image_rgb, depth_map, num_points, uniform_floor=0.8, rng=rng
+        )
 
         all_positions.append(positions)
         all_colors.append(colors)

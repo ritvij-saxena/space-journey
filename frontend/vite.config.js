@@ -5,8 +5,8 @@ import topLevelAwait from "vite-plugin-top-level-await";
 import { resolve } from "path";
 
 export default defineConfig(({ command }) => ({
-  // Base path for GitHub Pages - change 'unsupervised_moma_replica' to your repo name
-  base: command === "build" ? "/unsupervised_moma_replica/" : "/",
+  // Base path for GitHub Pages - change 'space-journey' to your repo name
+  base: command === "build" ? "/space-journey/" : "/",
 
   plugins: [
     wasm(),
@@ -27,7 +27,7 @@ export default defineConfig(({ command }) => ({
   resolve: {
     alias: {
       // Alias for WASM package to ensure it's bundled correctly
-      "unsupervised-wasm": resolve(__dirname, "../rust-wasm/pkg"),
+      "space-journey-wasm": resolve(__dirname, "../rust-wasm/pkg"),
     },
   },
 
@@ -56,6 +56,6 @@ export default defineConfig(({ command }) => ({
   },
 
   optimizeDeps: {
-    exclude: ["unsupervised-wasm"],
+    exclude: ["space-journey-wasm"],
   },
 }));

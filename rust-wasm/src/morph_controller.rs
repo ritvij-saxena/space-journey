@@ -42,8 +42,8 @@ impl Default for MorphConfig {
     fn default() -> Self {
         MorphConfig {
             coalesce_duration: 8.0,
-            hold_duration_base: 12.0,
-            hold_duration_variance: 5.0,
+            hold_duration_base: 18.0,   // Space: longer scenic holds
+            hold_duration_variance: 12.0, // 18–30s random range
             dissolve_duration: 6.0,
             reform_duration: 8.0,
         }

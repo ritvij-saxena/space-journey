@@ -79,7 +79,7 @@ export async function initWasm() {
   if (wasmModule) return wasmModule;
 
   try {
-    const wasm = await import("unsupervised-wasm/unsupervised_wasm.js");
+    const wasm = await import("space-journey-wasm/space_journey_wasm.js");
     wasmInstance = await wasm.default(); // instance.exports — has .memory for zero-copy access
     wasmModule = wasm;
     console.log("WASM module loaded successfully");

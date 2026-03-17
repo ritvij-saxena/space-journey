@@ -1,80 +1,62 @@
-# Unsupervised: Generative Art Installation
+# Space Journey
 
-A generative AI art installation inspired by Refik Anadol's "Unsupervised" at MoMa. This project uses machine learning to create continuously evolving visual compositions, influenced by real-time weather data.
+A cinematic, first-person flight through infinite procedurally generated space — built to unwind.
 
-## Architecture
+I made this because I love music and space. There's something about drifting through the cosmos with ambient sound that just quiets everything down. So I vibe-coded this over a few sessions as a way to relax, explore Rust/WASM in the browser, and make something that feels good to look at.
 
-- **Rust WASM**: Image processing, noise generation, and compute-intensive operations
-- **JavaScript Frontend**: Real-time visualization with Three.js and weather integration
-- **Python/Google Colab**: Model training and image generation
-- **GitHub Pages**: Static deployment
+**[Live Demo →](https://ritvijsaxena.github.io/space-journey)**
 
-## Project Structure
+---
 
-```
-.
-├── rust-wasm/              # Rust WASM module for processing
-├── frontend/               # JavaScript + HTML frontend
-│   ├── src/               # JS source files
-│   └── assets/            # Images, styles
-├── colab-notebooks/        # Google Colab notebooks
-├── docs/                   # Documentation & deployment
-└── README.md
-```
+## What it is
 
-## Quick Start
+An infinite, looping space flight. The camera glides on auto-pilot, curving toward whatever looks interesting — black holes, nebulae, binary stars, asteroid belts, wormholes. Ambient music plays underneath. You just watch.
 
-### 1. Setup Rust WASM
+Every object is procedurally generated. No two journeys are the same.
+
+## Space objects
+
+| Object | Notes |
+|--------|-------|
+| Star systems | HR diagram spectral classes, Keplerian orbiting planets |
+| Binary stars | Two stars orbiting a barycenter with circumbinary planets |
+| Nebulae | Particle emission clouds |
+| Interstellar clouds | Dark molecular clouds |
+| Black holes | Opaque shadow, Doppler-shifted accretion disk, gravitational lensing arc |
+| Wormholes | Vortex particle physics |
+| Asteroid fields | Real-time n-body Kepler simulation |
+| Neutron stars / pulsars | Rotating beam cone, X-ray jets |
+
+## Controls
+
+| Key | Action |
+|-----|--------|
+| Space | Play / Pause music |
+| M | Mute / Unmute |
+| ↑ / ↓ | Volume |
+| 1 / 2 | Bloom strength |
+
+## How it's built
+
+- **Rust → WASM** — particle physics (Verlet integration, curl noise, spring forces), Keplerian orbital mechanics, n-body asteroid simulation, procedural space scene generators
+- **Three.js** — custom ShaderMaterials for every celestial body type, AdditiveBlending particle renderer, bloom + afterimage + chromatic aberration + gravitational lensing post-processing
+- **Vite** — dev server, WASM bundling
+
+## Run locally
 
 ```bash
+# 1. Build WASM
 cd rust-wasm
-wasm-pack build --target web
-```
+wasm-pack build --target web --release
 
-### 2. Setup Frontend
-
-```bash
-cd frontend
+# 2. Start frontend
+cd ../frontend
 npm install
 npm run dev
 ```
 
-### 3. Generate Art via Google Colab
-
-- Open `colab-notebooks/unsupervised-generation.ipynb`
-- Follow instructions to generate images
-- Export results to `frontend/assets/generated/`
-
-## External Factors
-
-**Procedural Randomization** (No API keys required!): The system generates environmental factors using:
-
-- **Time-based patterns**: Hour/day/season cycles create natural variations
-- **Device motion sensors**: Accelerometer/gyroscope data (if available) adds user interaction
-- **Deterministic randomization**: Seeded pseudo-random functions for reproducible yet varied output
-- **Screen properties**: Display characteristics create unique patterns per viewer
-
-These factors map to visual parameters:
-
-- Temperature → Color palette (blue to red)
-- Humidity → Particle density (sparse to dense)
-- Wind speed → Animation speed (calm to turbulent)
-- Overall intensity → Complexity scaling
-
-## Technologies
-
-- **Rust**: WASM compilation, performance-critical code
-- **WebAssembly**: Browser-based computation
-- **Three.js**: 3D visualization
-- **Stable Diffusion**: Image generation
-- **JavaScript**: Procedural environmental generation (no external APIs)
-- **GitHub Pages**: Static deployment
+Open `http://localhost:3000` → click **Begin Journey**.
 
 ## License
 
 MIT
-
-## References
-
-- [Unsupervised by Refik Anadol](https://www.moma.org/)
-- [Stable Diffusion](https://huggingface.co/stabilityai/stable-diffusion-2)
