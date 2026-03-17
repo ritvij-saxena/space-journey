@@ -3,38 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unsupervised Tribute - Generative Art Installation</title>
+    <title>Space Journey — Generative Cosmos</title>
     <link rel="stylesheet" href="./src/styles.css">
 </head>
 <body>
     <!-- Start overlay - required for audio autoplay -->
     <div id="start-overlay">
         <div id="start-content">
-            <h1>Unsupervised Tribute</h1>
-            <p>A generative art experience</p>
-            <button id="start-button">Enter</button>
+            <h1>Space Journey</h1>
+            <p>A voyage through the cosmos</p>
+            <button id="start-button">Begin Journey</button>
             <p class="hint">Audio: Marconi Union - Weightless</p>
         </div>
     </div>
 
     <div id="container">
         <canvas id="canvas"></canvas>
-        <div id="info-panel">
-            <div id="info-header">
-                <h1>Unsupervised Tribute</h1>
-                <button id="info-toggle">−</button>
-            </div>
-            <div id="info-content">
-                <div id="weather-data">
-                    <p>Temperature: <span id="temp">--</span>°C</p>
-                    <p>Humidity: <span id="humidity">--</span>%</p>
-                    <p>Wind: <span id="wind">--</span> m/s</p>
-                </div>
-                <div id="location">
-                    <p id="city">Generative Environment</p>
-                </div>
-            </div>
-        </div>
     </div>
 
     <!-- YouTube Audio Player (hidden) -->
@@ -45,7 +29,20 @@
     <!-- Audio control hint -->
     <div id="audio-hint">Space: Play/Pause | M: Mute | ↑↓: Volume</div>
 
+    <!-- Journey waypoint label -->
+    <div id="journey-label"></div>
+
+    <!-- Fullscreen button -->
+    <button id="fullscreen-btn">FULLSCREEN</button>
+
     <script src="https://www.youtube.com/iframe_api"></script>
     <script type="module" src="./src/main.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () =>
+          navigator.serviceWorker.register('./sw.js').catch(() => {})
+        );
+      }
+    </script>
 </body>
 </html>

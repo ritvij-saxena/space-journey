@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { FlightController }       from './flight-controller.js';
 import { SpaceWorld }             from './space-world.js';
+import { SolarJourney, JOURNEY_END_Z } from './solar-journey.js';
 import { createBackgroundStars }  from './background-stars.js';
 import { PostProcessor }          from './post-processing.js';
 import { texLib }                 from './texture-library.js';
@@ -54,12 +55,12 @@ class FpsAdaptor {
     const avgFps = this.samples.reduce((a, b) => a + b) / this.samples.length;
 
     if (avgFps < this.targetFps * 0.83 && this.currentCount > this.minCount) {
-      this.currentCount = Math.max(this.minCount, Math.floor(this.currentCount * 0.8));
+      this.currentCount = Math.max(this.minCount, Math.floor(this.currentCount * 0.6));
       this.geometry.setDrawRange(0, this.currentCount);
       if (this.wasmSystem) {
         this.wasmSystem.set_active_count(this.currentCount);
       }
-      this.cooldownFrames = 120;
+      this.cooldownFrames = 30; // was 120 — at 20fps, 120 frames = 6s gap between reductions
       console.log(`[FpsAdaptor] ${this.currentCount} particles (avg ${avgFps.toFixed(1)} fps)`);
     }
   }
@@ -69,10 +70,12 @@ class FpsAdaptor {
 
 class SpaceJourneyApp {
   constructor() {
-    this.canvas       = document.getElementById('canvas');
-    this.startOverlay = document.getElementById('start-overlay');
-    this.startButton  = document.getElementById('start-button');
-    this.audioHint    = document.getElementById('audio-hint');
+    this.canvas         = document.getElementById('canvas');
+    this.startOverlay   = document.getElementById('start-overlay');
+    this.startButton    = document.getElementById('start-button');
+    this.audioHint      = document.getElementById('audio-hint');
+    this.journeyLabel   = document.getElementById('journey-label');
+    this.fullscreenBtn  = document.getElementById('fullscreen-btn');
 
     this.isStarted = false;
     this.ytPlayer  = null;
@@ -96,7 +99,7 @@ class SpaceJourneyApp {
       powerPreference: 'high-performance',
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // cap at 1.5 — crisp on Retina without full 4x fill cost
 
     // Scene-wide lighting for standard materials (asteroids, satellites)
     this.scene.add(new THREE.AmbientLight(0x111118, 4));
@@ -112,18 +115,21 @@ class SpaceJourneyApp {
     this.particleRenderer   = null;
     this.fpsAdaptor         = null;
     this.statsGl            = null;
+    this._lensNdc           = new THREE.Vector3(); // reused each frame, no GC pressure
 
     this.init();
   }
 
   async init() {
     // ── GPU tier detection (async, completes before first particle frame) ────
-    let particleCount = 20000; // safe default for mid-range GPU
+    let particleCount = 8000; // conservative default until GPU tier confirmed
+    let detectedTier  = 1;   // start conservative; upgraded after GPU detection
     try {
       const gpuTier = await getGPUTier();
-      const countByTier = { 0: 2000, 1: 8000, 2: 20000, 3: 40000 };
-      particleCount = countByTier[gpuTier.tier] ?? 20000;
-      console.log(`[GPU] tier=${gpuTier.tier}, gpu="${gpuTier.gpu}", particleCount=${particleCount}`);
+      detectedTier  = gpuTier.tier ?? 2;
+      const countByTier = { 0: 500, 1: 1500, 2: 2500, 3: 3000 };
+      particleCount = countByTier[detectedTier] ?? 20000;
+      console.log(`[GPU] tier=${detectedTier}, gpu="${gpuTier.gpu}", particleCount=${particleCount}`);
     } catch (gpuErr) {
       console.warn('[GPU] detect-gpu failed, using default count:', gpuErr);
     }
@@ -138,9 +144,31 @@ class SpaceJourneyApp {
 
     if (wasmMod?.WasmParticleSystem) {
       try {
-        // Generate scene 3 (Spiral Galaxy) as the default starting scene
         const seed = Math.floor(Math.random() * 0xffffffff);
-        this.wasmParticleSystem = new wasmMod.WasmParticleSystem(particleCount, seed, 1);
+        const NUM_SCENES = 6; // Starfield, Nebula, BlackHole, Galaxy, Wormhole, Cloud
+
+        // Create system with 6 morph states — one per space scene type
+        this.wasmParticleSystem = new wasmMod.WasmParticleSystem(particleCount, seed, NUM_SCENES);
+
+        // Generate each space scene and load it as a morph target.
+        // scene_type auto-syncs from morph state index, so physics forces (Keplerian,
+        // vortex, black-hole gravity) automatically apply for the correct scene.
+        for (let sceneType = 0; sceneType < NUM_SCENES; sceneType++) {
+          const sceneSeed = (seed + sceneType * 0x1234567) >>> 0;
+          const sceneData = this.wasmParticleSystem.generate_space_scene(sceneType, particleCount, sceneSeed);
+          const positions = new Float32Array(particleCount * 3);
+          const colors    = new Float32Array(particleCount * 3);
+          for (let i = 0; i < particleCount; i++) {
+            positions[i*3]   = sceneData[i*6];
+            positions[i*3+1] = sceneData[i*6+1];
+            positions[i*3+2] = sceneData[i*6+2];
+            colors[i*3]      = sceneData[i*6+3];
+            colors[i*3+1]    = sceneData[i*6+4];
+            colors[i*3+2]    = sceneData[i*6+5];
+          }
+          this.wasmParticleSystem.load_art_state(sceneType, positions);
+          this.wasmParticleSystem.load_art_colors(sceneType, colors);
+        }
 
         // Zero-copy memory bridge: captures stable ptr/len offsets once
         this.wasmBridge = createWasmBridge(this.wasmParticleSystem);
@@ -166,8 +194,9 @@ class SpaceJourneyApp {
       }
     }
 
-    // Bright foreground stars (spectral colors, diffraction spikes)
-    this.stars = createBackgroundStars(40000);
+    // Bright foreground stars — scale to GPU tier to stay within budget
+    const starCountByTier = { 0: 3000, 1: 8000, 2: 15000, 3: 20000 };
+    this.stars = createBackgroundStars(starCountByTier[detectedTier] ?? 25000);
     this.scene.add(this.stars);
 
     // Milky Way photorealistic dome (async — loads after first frame)
@@ -186,11 +215,19 @@ class SpaceJourneyApp {
     // Procedural infinite world (uses WasmKeplerSim for asteroid belt n-body)
     this.world = new SpaceWorld(this.scene);
 
+    // Scripted solar system journey — Pluto → Sun → Beyond
+    this.solarJourney = new SolarJourney(this.scene);
+    await this.world.preload(); // ensure textures loaded before building planets
+    this.solarJourney.build();
+
     // Auto-pilot flight controller
     this.flight = new FlightController(this.camera);
 
     // Post-processing (bloom + afterimage + chromatic aberration)
+    this.detectedTier  = detectedTier;
+    this.useComposer   = detectedTier >= 2; // tier 0-1: skip composer, direct render saves framebuffer overhead
     this.postProcessor = new PostProcessor(this.renderer, this.scene, this.camera);
+    this.postProcessor.setQualityTier(detectedTier);
 
     // ── stats-gl debug overlay (only when ?debug is in the URL) ─────────────
     if (new URLSearchParams(window.location.search).has('debug')) {
@@ -217,6 +254,25 @@ class SpaceJourneyApp {
         this.start();
       }
     });
+
+    this.fullscreenBtn?.addEventListener('click', () => this.toggleFullscreen());
+    document.addEventListener('fullscreenchange', () => this._onFullscreenChange());
+  }
+
+  toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.();
+    }
+  }
+
+  _onFullscreenChange() {
+    if (this.fullscreenBtn) {
+      this.fullscreenBtn.textContent = document.fullscreenElement ? 'EXIT FULLSCREEN' : 'FULLSCREEN';
+    }
+    // Re-sync renderer size after fullscreen transition
+    this.onWindowResize();
   }
 
   start() {
@@ -260,9 +316,14 @@ class SpaceJourneyApp {
           fs: 0, rel: 0, origin: window.location.origin,
         },
         events: {
-          onReady:       (e) => { e.target.setVolume(this.volume); e.target.playVideo(); this.updateAudioHint(); },
-          onStateChange: (e) => { if (e.data === 0) { e.target.seekTo(0); e.target.playVideo(); } },
-          onError:       ()  => { this.ytPlayer?.destroy(); tryVideo(index + 1); },
+          onReady: (e) => { e.target.setVolume(this.volume); e.target.playVideo(); this.updateAudioHint(); },
+          onStateChange: (e) => {
+            // ENDED (0) or stuck UNSTARTED (-1) → restart from beginning
+            if (e.data === 0 || e.data === -1) {
+              setTimeout(() => { e.target.seekTo(0); e.target.playVideo(); }, 200);
+            }
+          },
+          onError: () => { this.ytPlayer?.destroy(); tryVideo(index + 1); },
         },
       });
     };
@@ -292,7 +353,7 @@ class SpaceJourneyApp {
   updateAudioHint() {
     if (!this.audioHint) return;
     const status = this.isPaused ? 'PAUSED' : this.isMuted ? 'MUTED' : `${this.volume}%`;
-    this.audioHint.textContent = `Space: Play/Pause | M: Mute | ↑↓: Volume | ${status}`;
+    this.audioHint.textContent = `F: Fullscreen | Space: Play/Pause | M: Mute | ↑↓: Volume | ${status}`;
   }
 
   // ── Window & keyboard ──────────────────────────────────────────────────────
@@ -307,6 +368,9 @@ class SpaceJourneyApp {
 
   onKeyDown(e) {
     switch (e.key) {
+      case 'f': case 'F':
+        this.toggleFullscreen();
+        break;
       case 'm': case 'M':
         this.toggleMute();
         break;
@@ -343,14 +407,14 @@ class SpaceJourneyApp {
     const bhList = [];
     for (const p of poi) {
       if (!p.isBH) continue;
-      const ndc = p.position.clone().project(this.camera);
-      if (ndc.z >= 1.0) continue; // behind camera
-      const screenPos = new THREE.Vector2((ndc.x + 1) * 0.5, (ndc.y + 1) * 0.5);
-      // Estimate screen-space Einstein radius from 3D BH radius and distance
+      this._lensNdc.copy(p.position).project(this.camera);
+      const _ndc = this._lensNdc;
+      if (_ndc.z >= 1.0) continue; // behind camera
+      const screenPos = new THREE.Vector2((_ndc.x + 1) * 0.5, (_ndc.y + 1) * 0.5);
       const dist        = p.position.distanceTo(this.camera.position);
       const fovFactor   = Math.tan((this.camera.fov * Math.PI / 360));
       const screenRadius = (p.bhRadius ?? 8) / (dist * fovFactor * 2.0);
-      bhList.push({ screenPos, depth: ndc.z, screenRadius });
+      bhList.push({ screenPos, depth: _ndc.z, screenRadius });
     }
     this.postProcessor.updateLensing(bhList);
   }
@@ -364,8 +428,17 @@ class SpaceJourneyApp {
     // 1. Update world: load/unload sectors, animate shaders
     this.world.update(dt, this.camera.position);
 
+    // 1b. Update scripted solar journey (planet rotation, moon orbits)
+    if (this.solarJourney) this.solarJourney.update(dt);
+
+    // Combined POI: solar journey bodies + deep-space procedural objects
+    const poi = [
+      ...(this.solarJourney?.getInterestingObjects() ?? []),
+      ...this.world.getInterestingObjects(),
+    ];
+
     // 2. Move camera via auto-pilot, attracted by nearby objects
-    this.flight.update(dt, this.world.getInterestingObjects());
+    this.flight.update(dt, poi);
 
     // 3. Background stars follow camera so they always surround it
     this.stars.position.copy(this.camera.position);
@@ -381,6 +454,12 @@ class SpaceJourneyApp {
     // Gravitational lensing — project BH positions to screen space
     this._updateGravLensing();
 
+    // WASM particle nebula: hide during solar journey (it lives at world origin),
+    // show only in deep space after the sun
+    if (this.particleRenderer) {
+      this.particleRenderer.getMesh().visible = this.camera.position.z < JOURNEY_END_Z;
+    }
+
     // WASM particle layer: update physics and upload positions via zero-copy bridge
     if (this.wasmParticleSystem && this.particleRenderer) {
       try {
@@ -391,14 +470,29 @@ class SpaceJourneyApp {
       }
     }
 
+    // Journey HUD label — show nearest waypoint name
+    if (this.journeyLabel && this.solarJourney) {
+      const label = this.solarJourney.getNearestLabel(this.camera.position.z);
+      if (label) {
+        this.journeyLabel.textContent = label;
+        this.journeyLabel.classList.add('visible');
+      } else {
+        this.journeyLabel.classList.remove('visible');
+      }
+    }
+
     // Adaptive FPS: reduce particle count if sustained below 50fps
     if (this.fpsAdaptor) {
       this.fpsAdaptor.update(dt);
     }
 
-    // 4. Render with post-processing
+    // 4. Render
     if (this.statsGl) this.statsGl.begin();
-    this.postProcessor.render();
+    if (this.useComposer) {
+      this.postProcessor.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
     if (this.statsGl) this.statsGl.end();
   }
 }

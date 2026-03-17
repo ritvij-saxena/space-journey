@@ -1,7 +1,7 @@
 /**
  * Particle Renderer
  *
- * High-performance particle system for Unsupervised-like fluid visuals.
+ * High-performance particle system for Space Journey.
  * Uses WASM for particle position computation, GPU for rendering.
  */
 
@@ -16,7 +16,6 @@ const vertexShader = `
 
   varying vec3 vColor;
   varying float vSize;
-  varying float vDepth;
 
   uniform float uTime;
   uniform float uPixelRatio;
@@ -26,41 +25,41 @@ const vertexShader = `
     vSize = size;
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-    vDepth = -mvPosition.z;
-    gl_PointSize = size * uPixelRatio * (160.0 / -mvPosition.z);
+    gl_PointSize = clamp(size * uPixelRatio * (160.0 / -mvPosition.z), 1.5, 64.0);
     gl_Position = projectionMatrix * mvPosition;
   }
 `;
 
-// Fragment shader for soft, glowing particles
+// Fragment shader — dual-layer star glow: tight core + soft halo
 const fragmentShader = `
   varying vec3 vColor;
   varying float vSize;
-  varying float vDepth;
 
   uniform float uTime;
 
   void main() {
-    // Soft circular particle with glow
     vec2 center = gl_PointCoord - vec2(0.5);
     float dist = length(center);
 
-    // Soft falloff
-    float alpha = 1.0 - smoothstep(0.0, 0.5, dist);
-    alpha *= alpha; // Softer edges
+    if (dist > 0.5) discard;
 
-    // Depth fade: distant particles appear dimmer
-    float depthFade = 1.0 - smoothstep(1.5, 6.0, vDepth);
-    alpha *= mix(0.35, 1.0, depthFade);
+    // Soft volumetric disc: gentle falloff so adjacent particles blend seamlessly
+    float core = exp(-dist * 12.0);
+    float halo = exp(-dist * 3.0) * 0.5;
+    float alpha = core + halo;
 
-    // Subtle glow that doesn't wash out color
-    float glow = exp(-dist * 6.0) * 0.2;
+    // Boost saturation: push colors away from grey toward their hue
+    vec3 col = vColor;
+    float luma = dot(col, vec3(0.299, 0.587, 0.114));
+    col = mix(vec3(luma), col, 2.0);
+    col = clamp(col, 0.0, 1.0);
 
-    vec3 col = vColor + vColor * glow;
+    // Core brightness boost
+    col = col * (1.0 + core * 0.5);
 
     if (alpha < 0.005) discard;
 
-    gl_FragColor = vec4(col, alpha * 0.07);
+    gl_FragColor = vec4(col, alpha * 0.25);
   }
 `;
 
@@ -145,9 +144,8 @@ export class ParticleRenderer {
     const posView = wasmBridge.getPositions();
     const colView = wasmBridge.getColors();
 
-    // Size = 0.3 matches Phase 3 tuning: convertPositionsToParticleData set size≈0.015,
-    // then updateFromWasm multiplied by 20 → sizes[i]≈0.3 → ~19px particles at AdditiveBlending density
-    const sizeArray = new Float32Array(particleCount).fill(0.3);
+    // Size = 0.65 → soft overlapping discs blend into volumetric clouds
+    const sizeArray = new Float32Array(particleCount).fill(0.65);
 
     // Replace geometry attributes with WASM-backed views + DynamicDrawUsage
     const posAttr = new THREE.BufferAttribute(posView, 3);
@@ -337,10 +335,21 @@ export class ParticleRenderer {
 
   update(time) {
     this.material.uniforms.uTime.value = time;
+    // Stars don't orbit the viewer — no mesh rotation.
+  }
 
-    // Very slow drift — keeps 3D depth perceptible without destroying art shapes
-    this.mesh.rotation.y = Math.sin(time * 0.04) * 0.12;
-    this.mesh.rotation.x = Math.sin(time * 0.03) * 0.06;
+  /**
+   * Set particle size appropriate for each space scene type.
+   * @param {number} sceneType - 0=Starfield, 1=Nebula, 2=BlackHole, 3=Galaxy, 4=Wormhole, 5=Cloud
+   */
+  setSceneSize(sceneType) {
+    const sizes = { 0: 0.20, 1: 0.50, 2: 0.30, 3: 0.30, 4: 0.35, 5: 0.45 };
+    const size = sizes[sceneType] ?? 0.35;
+    const sizeArray = this.geometry.attributes.size?.array;
+    if (sizeArray) {
+      sizeArray.fill(size);
+      this.geometry.attributes.size.needsUpdate = true;
+    }
   }
 
   getMesh() {
