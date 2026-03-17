@@ -34,7 +34,7 @@ Every object is procedurally generated. No two journeys are the same.
 | Space | Play / Pause music |
 | M | Mute / Unmute |
 | ↑ / ↓ | Volume |
-| 1 / 2 | Bloom strength |
+| 1 / 2 | Bloom strength — controls how much bright objects (stars, nebulae, accretion disks) bleed light into the surrounding area, like a long-exposure astrophotograph |
 
 ## How it's built
 
