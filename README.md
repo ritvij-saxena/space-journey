@@ -4,7 +4,7 @@ A cinematic, first-person flight through infinite procedurally generated space �
 
 I made this because I love music and space. There's something about drifting through the cosmos with ambient sound that just quiets everything down. So I vibe-coded this over a few sessions as a way to relax, explore Rust/WASM in the browser, and make something that feels good to look at.
 
-**[Live Demo →](https://ritvijsaxena.github.io/space-journey)**
+**[Live Demo →](https://ritvij-saxena.github.io/space-journey/)**
 
 ---
 
